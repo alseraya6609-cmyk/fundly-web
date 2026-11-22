@@ -749,6 +749,15 @@ async function mutateUnit(assetId: string, key: string, change: (u: PropertyUnit
   throw new AssetError('تغيّرت البيانات أثناء الحفظ — أعد المحاولة')
 }
 
+/** حالة الوحدة بعد حفظ عقدها (_setUnitStatus): «مسودة» أو «مؤجرة». */
+export async function setUnitStatus(assetId: string, key: string, status: string) {
+  const { data, error } = await supabase.from('project_assets').select('units_json').eq('id', assetId).maybeSingle()
+  if (error) throw error
+  const unit = decodeUnits((data as { units_json: string | null } | null)?.units_json).find((u) => unitIsLive(u) && unitKey(u) === key)
+  if (!unit || unit.status === status) return
+  await mutateUnit(assetId, key, (u) => ({ ...u, status }))
+}
+
 /** تجميد الوحدة أو إلغاء تجميدها (شاغرة). */
 export const toggleUnitFreeze = (assetId: string, key: string) => mutateUnit(assetId, key, (u) => ({ ...u, status: u.status === 'مجمّدة' ? 'شاغرة' : 'مجمّدة' }))
 

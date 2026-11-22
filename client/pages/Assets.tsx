@@ -4,7 +4,7 @@ import { useSearchParams } from 'react-router-dom'
 import { Archive, Ban, Building2, CheckCircle2, LayoutGrid, MoreVertical, Pencil, Plus, Snowflake, Trash2 } from 'lucide-react'
 import { useI18n } from '@/lib/i18n'
 import { moduleHidden, useSession } from '@/lib/session'
-import { ARCHIVED, assetMeta, assetUnits, useAssetEntries, useAssets, useCurrency, useUnitContracts, useUnitPayments, type Asset, type AssetEntry, type UnitPayment } from '@/lib/data'
+import { ARCHIVED, assetMeta, assetUnits, useAssetEntries, useAssets, useCurrency, useUnitContracts, useUnitPayments, type Asset, type AssetEntry, type UnitContract, type UnitPayment } from '@/lib/data'
 import { ASSET_GROUPS, MODULE_COLORS, assetGroup } from '@/lib/catalog'
 import { date, matches, money } from '@/lib/format'
 import { FileButton } from '@/components/FileButton'
@@ -20,7 +20,10 @@ import { archiveAsset, cancelAsset, cancelBlockedMessage, isCancelledAsset } fro
 import { PropertyWizard } from '@/components/PropertyWizard'
 import { AddUnitsNow, PropertyEditor } from '@/components/PropertyEditor'
 import { unitIcon } from '@/components/PropertyParts'
-import { archiveUnit, decodeUnits, toggleUnitFreeze, unitHasOpenContract, unitInfoRows, unitIsLive, unitKey, type PropertyUnit } from '@/lib/propertyWrite'
+import { PROPERTY_TYPE_KEY, archiveUnit, decodeUnits, toggleUnitFreeze, unitHasOpenContract, unitInfoRows, unitIsLive, unitKey, type PropertyUnit } from '@/lib/propertyWrite'
+import { LeaseForm } from '@/components/LeaseForm'
+import { contractNumber, maintBlocksLease, pretty } from '@/lib/lease'
+import { splitLogs as splitAssetLogs } from '@/lib/vehicleWrite'
 
 // أسماء الفئات في لوحة التحكم (VISIBILITY_PAGES ← assets).
 const ADMIN_TITLE: Record<string, string> = {
@@ -520,6 +523,7 @@ function AssetUnits({ asset, onEditUnit, onDone }: { asset: Asset; onEditUnit: (
   const units = decodeUnits(asset.units_json).filter(unitIsLive)
   const [unit, setUnit] = useState<PropertyUnit | null>(null)
   const [adding, setAdding] = useState<'units' | 'facilities' | null>(null)
+  const [leasing, setLeasing] = useState<{ unit: PropertyUnit; existing?: UnitContract } | null>(null)
   const property = asset.category === 'real_estate'
   const editable = property && !isCancelledAsset(asset) && asset.status !== ARCHIVED
   const annexes = Object.entries((asset.annexes ?? {}) as Record<string, unknown>).filter(([, v]) => Number(v) > 0)
@@ -594,6 +598,10 @@ function AssetUnits({ asset, onEditUnit, onDone }: { asset: Asset; onEditUnit: (
             setUnit(null)
             onEditUnit(unit.type, unitKey(unit))
           }}
+          onLease={(existing) => {
+            setLeasing({ unit, existing })
+            setUnit(null)
+          }}
           onDone={(m) => {
             setUnit(null)
             onDone(m)
@@ -601,15 +609,33 @@ function AssetUnits({ asset, onEditUnit, onDone }: { asset: Asset; onEditUnit: (
         />
       )}
       {adding && <AddUnitsNow asset={asset} facilitiesOnly={adding === 'facilities'} onClose={() => setAdding(null)} onSaved={() => {}} />}
+      {leasing && (
+        <LeaseForm
+          asset={asset}
+          unit={leasing.unit}
+          propertyType={splitAssetLogs(asset.logs_json).meta[PROPERTY_TYPE_KEY] ?? ''}
+          existing={leasing.existing}
+          onClose={() => setLeasing(null)}
+          onDone={(m) => {
+            setLeasing(null)
+            onDone(m)
+          }}
+        />
+      )}
     </div>
   )
 }
 
 /** صفحة الوحدة: بياناتها وأوامرها (تعديل، تجميد، أرشفة) — _onUnitMenuAction. */
-function UnitSheet({ asset, unit, editable, onClose, onEdit, onDone }: { asset: Asset; unit: PropertyUnit; editable: boolean; onClose: () => void; onEdit: () => void; onDone: (m: string) => void }) {
+function UnitSheet({ asset, unit, editable, onClose, onEdit, onLease, onDone }: { asset: Asset; unit: PropertyUnit; editable: boolean; onClose: () => void; onEdit: () => void; onLease: (existing?: UnitContract) => void; onDone: (m: string) => void }) {
   const { t } = useI18n()
   const qc = useQueryClient()
   const contracts = useUnitContracts()
+  const allPayments = useUnitPayments()
+  // العقد الحالي للوحدة: أحدث عقد غير ملغى (_load).
+  const contract = (contracts.data ?? []).find((c) => c.asset_id === asset.id && c.unit_key === unitKey(unit) && c.status !== 'cancelled')
+  const contractPayments = contract ? (allPayments.data ?? []).filter((p) => p.contract_id === contract.id) : []
+  const [leaseError, setLeaseError] = useState('')
   const [archiving, setArchiving] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -661,6 +687,51 @@ function UnitSheet({ asset, unit, editable, onClose, onEdit, onDone }: { asset: 
         </div>
       )}
       {error && !archiving && <p className="mt-3 rounded-inner bg-danger-soft px-3 py-2 text-[12px] font-bold text-danger">{t(error)}</p>}
+      <div className="mt-5">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <p className="flex items-center gap-2 text-[14px] font-extrabold text-title">
+            <span className="h-4 w-1 rounded-full bg-gold" />
+            {t('إدارة الإيجار')}
+          </p>
+          {editable && !contract && (
+            <button
+              type="button"
+              onClick={() => {
+                setLeaseError('')
+                if (maintBlocksLease(unit.extras)) setLeaseError('الوحدة تحت صيانة تمنع التأجير — سجّل «انتهاء الصيانة» من قسم الصيانة أولًا.')
+                else onLease()
+              }}
+              className="flex items-center gap-1 rounded-full bg-brand px-3 py-1.5 text-[12px] font-extrabold text-white"
+            >
+              <Plus className="size-4" />
+              {t('تأجير الوحدة')}
+            </button>
+          )}
+        </div>
+        {leaseError && <p className="mb-2 rounded-inner bg-danger-soft px-3 py-2 text-[12px] font-bold text-danger">{t(leaseError)}</p>}
+        {!contract ? (
+          <p className="rounded-inner bg-surface px-3 py-3 text-[12.5px] text-sub">{t(editable ? 'اضغط + لبدء عملية التأجير وإنشاء عقد.' : 'لا توجد بيانات حالياً')}</p>
+        ) : (
+          <div className="rounded-inner border border-line p-3">
+            <InfoRow label="رقم العقد" value={contractNumber(contract)} />
+            <InfoRow label="المستأجر" value={contract.tenant_name} />
+            <InfoRow label="مدة العقد" value={[contract.start_date && pretty(contract.start_date), contract.end_date && pretty(contract.end_date)].filter(Boolean).join(' — ')} />
+            <InfoRow label="قيمة العقد" value={Number(contract.annual_rent) > 0 ? Number(contract.annual_rent).toFixed(2) : ''} />
+            <InfoRow label="الحالة" value={t(CONTRACT_STATUS[contract.status] ?? contract.status)} />
+            {contractPayments.length > 0 && <InfoRow label="الدفعات" value={`${contractPayments.filter((p) => p.status === 'paid').length} / ${contractPayments.length}`} />}
+            {contract.status === 'pending' && editable && (
+              <button type="button" onClick={() => onLease(contract)} className="mt-2 w-full rounded-inner bg-gold/15 px-3 py-2.5 text-start text-[12px] font-bold leading-relaxed text-gold-dark">
+                {t('هذا العقد محفوظ كمسودة لنقص بعض بياناته — اضغط هنا لإكماله وتأكيد حفظه.')}
+              </button>
+            )}
+            {editable && (
+              <button type="button" onClick={() => onLease(contract)} className="mt-2 h-11 w-full rounded-field bg-brand text-[13px] font-extrabold text-white hover:bg-brand-dark">
+                {t('العقد كامل')}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
       <Confirm
         open={archiving}
         title="أرشفة"

@@ -273,6 +273,9 @@ export type UnitContract = {
   end_date: string | null
   status: string
   notes: string | null
+  tenant_phone?: string | null
+  group_key?: string | null
+  created_at?: string
 }
 
 export type UnitPayment = {
