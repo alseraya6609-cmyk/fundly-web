@@ -14,6 +14,7 @@ import { SharedDetails } from '@/components/SharedDetails'
 import { PersonalEditor } from '@/components/PersonalEditor'
 import { Confirm } from '@/components/Confirm'
 import { archiveEntry, canEdit, trashEntry } from '@/lib/personalWrite'
+import { SharedError, setSharedArchived } from '@/lib/sharedWrite'
 import { errorText } from '@/lib/supabase'
 
 type Group = { key: string; label: string; icon: LucideIcon }
@@ -288,8 +289,9 @@ function EntryDetails({
   onChanged?: (message: string) => void
 }) {
   const { t } = useI18n()
+  const { profile } = useSession()
   const qc = useQueryClient()
-  const [action, setAction] = useState<'archive' | 'delete' | null>(null)
+  const [action, setAction] = useState<'archive' | 'delete' | 'shared-archive' | null>(null)
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState('')
   async function runAction() {
@@ -297,13 +299,20 @@ function EntryDetails({
     setBusy(true)
     setActionError('')
     try {
+      if (action === 'shared-archive') {
+        await setSharedArchived(entry, profile?.fnd_id ?? '', true)
+        await qc.invalidateQueries({ queryKey: ['shared'] })
+        setAction(null)
+        onChanged?.('تمت أرشفة الالتزام بنجاح')
+        return
+      }
       if (action === 'archive') await archiveEntry(entry)
       else await trashEntry(entry)
       await qc.invalidateQueries({ queryKey: ['personal'] })
       setAction(null)
       onChanged?.(action === 'archive' ? 'تمت أرشفة الالتزام بنجاح' : 'نُقل الالتزام إلى سلة المحذوفات')
     } catch (e) {
-      setActionError(errorText(e) || 'تعذّر الحفظ. تحقّق من الإنترنت ثم حاول مجددًا.')
+      setActionError(e instanceof SharedError ? e.message : errorText(e) || 'تعذّر الحفظ. تحقّق من الإنترنت ثم حاول مجددًا.')
     } finally {
       setBusy(false)
     }
@@ -346,15 +355,30 @@ function EntryDetails({
           </button>
         </div>
       )}
+      {page === 'shared' && (
+        <button
+          type="button"
+          onClick={() => {
+            setActionError('')
+            setAction('shared-archive')
+          }}
+          className="mt-4 flex h-11 w-full items-center justify-center gap-1.5 rounded-inner bg-surface text-[13px] font-extrabold text-body hover:bg-line"
+        >
+          <Archive className="size-4" />
+          {t('أرشفة')}
+        </button>
+      )}
       <Confirm
         open={!!action}
-        title={action === 'archive' ? 'أرشفة الالتزام' : 'حذف الالتزام'}
+        title={action === 'delete' ? 'حذف الالتزام' : 'أرشفة الالتزام'}
         message={`«${entry.title}» — ${t(
-          action === 'archive'
-            ? 'سيُنقل إلى الأرشيف ويمكنك إخراجه لاحقًا. هل تريد الأرشفة؟'
-            : 'سيُنقل إلى سلة المهملات، ويمكنك استعادته منها أو حذفه نهائيًا من التطبيق. هل تريد المتابعة؟',
+          action === 'shared-archive'
+            ? 'يُؤرشف عندك وحدك ويبقى عند بقية الأعضاء، ويصلهم إشعار. هل تريد الأرشفة؟'
+            : action === 'archive'
+              ? 'سيُنقل إلى الأرشيف ويمكنك إخراجه لاحقًا. هل تريد الأرشفة؟'
+              : 'سيُنقل إلى سلة المهملات، ويمكنك استعادته منها أو حذفه نهائيًا من التطبيق. هل تريد المتابعة؟',
         )}`}
-        confirmLabel={action === 'archive' ? 'أرشفة' : 'حذف'}
+        confirmLabel={action === 'delete' ? 'حذف' : 'أرشفة'}
         danger={action === 'delete'}
         busy={busy}
         error={actionError}
@@ -463,7 +487,7 @@ function EntryDetails({
             ? editable
               ? 'التعديل هنا يحفظ في حسابك ويظهر في التطبيق. الدفعات والسجلات الخاصة بالالتزام من التطبيق.'
               : 'هذا النوع يُعدَّل من التطبيق حاليًا.'
-            : 'التعديل والإضافة من التطبيق حاليًا. الموقع للعرض في هذه المرحلة.',
+            : 'الإضافة والتعديل والحذف في الالتزامات المشتركة من التطبيق حاليًا.',
         )}
       </p>
     </div>

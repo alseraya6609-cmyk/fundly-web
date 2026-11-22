@@ -6,6 +6,7 @@ import { useSession } from '@/lib/session'
 import { ARCHIVED, assetUnits, hasMine, personArchived, useAssets, usePeopleAll, usePersonalAll, useSharedAll, useStore, type Entry, type Person } from '@/lib/data'
 import { canEdit, unarchiveEntry } from '@/lib/personalWrite'
 import { PeopleError, setPersonArchived } from '@/lib/peopleWrite'
+import { SharedError, setSharedArchived } from '@/lib/sharedWrite'
 import { errorText } from '@/lib/supabase'
 import { Confirm } from '@/components/Confirm'
 import { date, matches } from '@/lib/format'
@@ -19,7 +20,7 @@ import { useReportSettings, type ReportDocument, type SummaryItem } from '@/lib/
   ووحدات العقارات المؤرشفة. للعرض فقط؛ إلغاء الأرشفة من التطبيق.
 */
 
-type Row = { key: string; source: string; title: string; subtitle: string; entry?: Entry; person?: Person }
+type Row = { key: string; source: string; title: string; subtitle: string; entry?: Entry; person?: Person; shared?: Entry }
 
 const SOURCES: { key: string; icon: LucideIcon; color: string }[] = [
   { key: 'الالتزامات الشخصية', icon: UserRound, color: '#0A5A50' },
@@ -34,6 +35,7 @@ export default function Archive() {
   const qc = useQueryClient()
   const [restoring, setRestoring] = useState<Entry | null>(null)
   const [restoringPerson, setRestoringPerson] = useState<Person | null>(null)
+  const [restoringShared, setRestoringShared] = useState<Entry | null>(null)
   const [busy, setBusy] = useState(false)
   const [restoreError, setRestoreError] = useState('')
   const [notice, setNotice] = useState('')
@@ -63,7 +65,9 @@ export default function Archive() {
     for (const e of shared.data ?? []) {
       const archived = (e.status ?? '').includes(ARCHIVED) || hasMine(e.details, 'مؤرشف عند', fnd) || (e.status === 'مكتملة' && !shown.has(e.id))
       if (!archived) continue
-      out.push({ key: `s${e.id}`, source: 'الالتزامات المشتركة', title: e.title, subtitle: join(t(e.entry_type), Number(e.amount) > 0 ? e.amount : '', date(e.due_date)) })
+      // المكتمل وحده يُعاد من التطبيق؛ المؤرشف (عندي أو حالته) يُخرج هنا.
+      const restorable = (e.status ?? '').includes(ARCHIVED) || hasMine(e.details, 'مؤرشف عند', fnd)
+      out.push({ key: `s${e.id}`, source: 'الالتزامات المشتركة', title: e.title, subtitle: join(t(e.entry_type), Number(e.amount) > 0 ? e.amount : '', date(e.due_date)), shared: restorable ? e : undefined })
     }
     ;(people.data ?? []).forEach((p, i) => {
       if (!personArchived(p)) return
@@ -176,6 +180,19 @@ export default function Archive() {
                       </p>
                     )}
                   </div>
+                  {r.shared && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRestoreError('')
+                        setRestoringShared(r.shared!)
+                      }}
+                      className="flex h-10 shrink-0 items-center gap-1.5 rounded-inner border border-line bg-white px-3 text-[12px] font-extrabold text-brand hover:bg-brand-soft"
+                    >
+                      <ArchiveRestore className="size-4" />
+                      <span className="hidden sm:inline">{t('إخراج من الأرشيف')}</span>
+                    </button>
+                  )}
                   {r.person && (
                     <button
                       type="button"
@@ -206,7 +223,7 @@ export default function Archive() {
               )
             })}
           </div>
-          <p className="mt-5 rounded-inner bg-surface px-4 py-3 text-[12px] text-sub">{t('الالتزامات الشخصية والأفراد والجهات تُخرج من الأرشيف هنا، وبقية الأقسام من التطبيق.')}</p>
+          <p className="mt-5 rounded-inner bg-surface px-4 py-3 text-[12px] text-sub">{t('الإخراج من الأرشيف هنا للالتزامات والأفراد والجهات، والعقارات والمكتمل من التطبيق.')}</p>
         </>
       )}
       <ReportPreview doc={preview} onClose={() => setPreview(null)} />
@@ -259,6 +276,31 @@ export default function Archive() {
           }
         }}
         onCancel={() => setRestoringPerson(null)}
+      />
+      <Confirm
+        open={!!restoringShared}
+        title="إخراج من الأرشيف"
+        message={`«${restoringShared?.title ?? ''}» — ${t('سيعود إلى الالتزامات النشطة. هل تريد المتابعة؟')}`}
+        confirmLabel="إخراج من الأرشيف"
+        busy={busy}
+        error={restoreError}
+        onConfirm={async () => {
+          if (!restoringShared) return
+          setBusy(true)
+          setRestoreError('')
+          try {
+            await setSharedArchived(restoringShared, fnd, false)
+            await qc.invalidateQueries({ queryKey: ['shared'] })
+            setRestoringShared(null)
+            setNotice('تم إخراج الالتزام من الأرشيف بنجاح')
+            window.setTimeout(() => setNotice(''), 4000)
+          } catch (e) {
+            setRestoreError(e instanceof SharedError ? e.message : errorText(e) || 'تعذر تنفيذ العملية. حاول مرة أخرى.')
+          } finally {
+            setBusy(false)
+          }
+        }}
+        onCancel={() => setRestoringShared(null)}
       />
     </div>
   )

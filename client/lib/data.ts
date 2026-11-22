@@ -76,6 +76,7 @@ export type Person = {
 
 export type InboxItem = {
   id: string
+  record_id: string
   sender_name: string
   sender_fnd: string
   source: string
@@ -430,7 +431,7 @@ export function useInbox() {
     queryKey: ['inbox', user?.id],
     enabled: !!user,
     staleTime: STALE,
-    // مثل pendingInbox في التطبيق: الجديد فقط، آخر 30. الموقع لا يغيّر حالته.
+    // مثل pendingInbox في التطبيق: الجديد فقط، آخر 30.
     queryFn: () =>
       rows<InboxItem>(
         supabase
