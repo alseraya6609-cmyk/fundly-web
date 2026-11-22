@@ -46,6 +46,9 @@ export type Asset = {
   is_frozen?: boolean
   is_pinned?: boolean
   is_sublease?: boolean
+  description?: string | null
+  map_link?: string | null
+  units_json?: string | null
   created_at: string
   updated_at: string
 }

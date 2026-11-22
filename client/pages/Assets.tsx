@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
-import { Archive, Ban, Building2, CheckCircle2, LayoutGrid, MoreVertical, Pencil, Plus, Trash2 } from 'lucide-react'
+import { Archive, Ban, Building2, CheckCircle2, LayoutGrid, MoreVertical, Pencil, Plus, Snowflake, Trash2 } from 'lucide-react'
 import { useI18n } from '@/lib/i18n'
 import { moduleHidden, useSession } from '@/lib/session'
 import { ARCHIVED, assetMeta, assetUnits, useAssetEntries, useAssets, useCurrency, useUnitContracts, useUnitPayments, type Asset, type AssetEntry, type UnitPayment } from '@/lib/data'
@@ -17,6 +17,10 @@ import { errorText } from '@/lib/supabase'
 import { VehicleForm, VehicleTypePicker } from '@/components/VehicleForm'
 import { vehicleClassOf, vehicleDraftOf, vehicleTypeOf } from '@/lib/vehicleWrite'
 import { archiveAsset, cancelAsset, cancelBlockedMessage, isCancelledAsset } from '@/lib/assetStatus'
+import { PropertyWizard } from '@/components/PropertyWizard'
+import { AddUnitsNow, PropertyEditor } from '@/components/PropertyEditor'
+import { unitIcon } from '@/components/PropertyParts'
+import { archiveUnit, decodeUnits, toggleUnitFreeze, unitHasOpenContract, unitInfoRows, unitIsLive, unitKey, type PropertyUnit } from '@/lib/propertyWrite'
 
 // أسماء الفئات في لوحة التحكم (VISIBILITY_PAGES ← assets).
 const ADMIN_TITLE: Record<string, string> = {
@@ -54,6 +58,9 @@ export default function Assets() {
   const [picking, setPicking] = useState(false)
   const [vehicle, setVehicle] = useState<{ vehicleClass: string; vehicleType: string; asset?: Asset } | null>(null)
   const canAddVehicle = groups.some((g) => g.key === 'equipment')
+  const canAddProperty = groups.some((g) => g.key === 'real_estate')
+  const [addingProperty, setAddingProperty] = useState(false)
+  const [editing, setEditing] = useState<{ asset: Asset; type?: string; focusKey?: string } | null>(null)
 
   if (moduleHidden(hidden, 'assets')) {
     return (
@@ -82,6 +89,12 @@ export default function Assets() {
         <div className="min-w-0 flex-1">
           <SearchField value={search} onChange={setSearch} placeholder="بحث" />
         </div>
+        {canAddProperty && (
+          <button type="button" onClick={() => setAddingProperty(true)} className="mb-3 flex h-11 shrink-0 items-center gap-1 rounded-inner bg-brand px-3 text-[12.5px] font-extrabold text-white hover:bg-brand-dark">
+            <Plus className="size-4" />
+            {t('إضافة عقار')}
+          </button>
+        )}
         {canAddVehicle && (
           <button type="button" onClick={() => setPicking(true)} className="mb-3 flex h-11 shrink-0 items-center gap-1 rounded-inner bg-brand px-3 text-[12.5px] font-extrabold text-white hover:bg-brand-dark">
             <Plus className="size-4" />
@@ -138,9 +151,13 @@ export default function Assets() {
               <AssetMenu
                 asset={open}
                 onEdit={
-                  assetGroup(open.category) === 'equipment' && !isCancelledAsset(open)
-                    ? () => setVehicle({ vehicleClass: vehicleClassOf(open), vehicleType: vehicleTypeOf(open), asset: open })
-                    : undefined
+                  isCancelledAsset(open)
+                    ? undefined
+                    : assetGroup(open.category) === 'equipment'
+                      ? () => setVehicle({ vehicleClass: vehicleClassOf(open), vehicleType: vehicleTypeOf(open), asset: open })
+                      : open.category === 'real_estate'
+                        ? () => setEditing({ asset: open })
+                        : undefined
                 }
                 onDone={(m, leave) => {
                   if (leave) setParams({})
@@ -166,19 +183,43 @@ export default function Assets() {
                   <InfoRow key={k} label={k} value={v} />
                 ))}
             </div>
-            <AssetUnits asset={open} />
+            <AssetUnits asset={open} onEditUnit={(type, focusKey) => setEditing({ asset: open, type, focusKey })} onDone={flash} />
             <AssetContracts asset={open} />
             <AssetRecords asset={open} onChanged={(m) => (setParams({}), flash(m))} />
             <p className="mt-5 rounded-inner bg-surface px-4 py-3 text-[12px] text-sub">
               {t(
                 assetGroup(open.category) === 'equipment'
                   ? 'عقود تأجير المركبة والتفويض من التطبيق حاليًا.'
-                  : 'تعديل بيانات العقار والنشاط ووحداته وعقوده من التطبيق حاليًا.',
+                  : open.category === 'real_estate'
+                    ? 'عقود إيجار الوحدات من التطبيق حاليًا.'
+                    : 'تعديل بيانات العقار والنشاط ووحداته وعقوده من التطبيق حاليًا.',
               )}
             </p>
           </div>
         )}
       </Sheet>
+      {addingProperty && (
+        <PropertyWizard
+          onClose={() => setAddingProperty(false)}
+          onDone={(m) => {
+            setAddingProperty(false)
+            setFilter('real_estate')
+            flash(m)
+          }}
+        />
+      )}
+      {editing && (
+        <PropertyEditor
+          asset={editing.asset}
+          initialType={editing.type}
+          focusKey={editing.focusKey}
+          onClose={() => setEditing(null)}
+          onDone={(m) => {
+            setEditing(null)
+            flash(m)
+          }}
+        />
+      )}
       {picking && (
         <VehicleTypePicker
           onClose={() => setPicking(false)}
@@ -470,37 +511,166 @@ function AssetRecord({ entry, onEdit, onDelete }: { entry: AssetEntry; onEdit?: 
   )
 }
 
-/** وحدات الأصل (units_json) — بلا المحذوفة. */
-function AssetUnits({ asset }: { asset: Asset }) {
+/**
+  وحدات العقار الحية (units_json بلا المؤرشفة والمحذوفة)، وكل وحدة تُفتح
+  بتفاصيلها وأوامرها، و«إضافة وحدة» و«المرافق العامة» كما في صفحة العقار.
+*/
+function AssetUnits({ asset, onEditUnit, onDone }: { asset: Asset; onEditUnit: (type: string, focusKey: string) => void; onDone: (m: string) => void }) {
   const { t } = useI18n()
-  const units = assetUnits(asset).filter((u) => u['status'] !== 'محذوفة')
-  if (!units.length) return null
-  const statuses = [...new Set(units.map((u) => String(u['status'] ?? '')).filter(Boolean))]
+  const units = decodeUnits(asset.units_json).filter(unitIsLive)
+  const [unit, setUnit] = useState<PropertyUnit | null>(null)
+  const [adding, setAdding] = useState<'units' | 'facilities' | null>(null)
+  const property = asset.category === 'real_estate'
+  const editable = property && !isCancelledAsset(asset) && asset.status !== ARCHIVED
+  const annexes = Object.entries((asset.annexes ?? {}) as Record<string, unknown>).filter(([, v]) => Number(v) > 0)
+  if (!units.length && !editable) return null
+  const statuses = [...new Set(units.map((u) => u.status).filter(Boolean))]
   return (
     <div className="mt-5">
-      <p className="mb-2 flex items-center gap-2 text-[14px] font-extrabold text-title">
-        <span className="h-4 w-1 rounded-full bg-gold" />
-        {t('الوحدات')}
-        <span className="rounded-full bg-surface px-2 text-[11px] text-sub">{units.length}</span>
-      </p>
-      {statuses.length > 1 && (
-        <p className="mb-2 text-[12px] text-sub">
-          {statuses.map((st) => `${t(st)}: ${units.filter((u) => u['status'] === st).length}`).join(' · ')}
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <p className="flex items-center gap-2 text-[14px] font-extrabold text-title">
+          <span className="h-4 w-1 rounded-full bg-gold" />
+          {t('الوحدات')}
+          <span className="rounded-full bg-surface px-2 text-[11px] text-sub">{units.length}</span>
         </p>
+        {editable && (
+          <button type="button" onClick={() => setAdding('units')} className="flex items-center gap-1 text-[12.5px] font-extrabold text-brand">
+            <Plus className="size-4" />
+            {t('إضافة وحدة')}
+          </button>
+        )}
+      </div>
+      {statuses.length > 1 && <p className="mb-2 text-[12px] text-sub">{statuses.map((st) => `${t(st)}: ${units.filter((u) => u.status === st).length}`).join(' · ')}</p>}
+      {units.length > 0 && (
+        <div className="grid grid-cols-2 gap-2 rounded-inner bg-surface p-2 sm:grid-cols-3">
+          {units.slice(0, 300).map((u, i) => {
+            const Icon = unitIcon(u.type)
+            return (
+              <button key={i} type="button" onClick={() => setUnit(u)} className="card-inner px-3 py-2 text-start hover:ring-1 hover:ring-brand">
+                <p dir="auto" className="flex items-center gap-1.5 text-[13px] font-extrabold text-title">
+                  <Icon className="size-3.5 shrink-0 text-brand" />
+                  <span className="truncate">{u.name || u.unitNumber || t('وحدة')}</span>
+                </p>
+                <p className="text-[11px] text-muted">{[u.type, u.status].filter(Boolean).map((x) => t(x)).join(' · ')}</p>
+              </button>
+            )
+          })}
+        </div>
       )}
-      <div className="grid grid-cols-2 gap-2 rounded-inner bg-surface p-2 sm:grid-cols-3">
-        {units.slice(0, 120).map((u, i) => (
-          <div key={i} className="card-inner px-3 py-2">
-            <p dir="auto" className="text-[13px] font-extrabold text-title">
-              {String(u['name'] ?? u['unitNumber'] ?? t('وحدة'))}
+      {property && (annexes.length > 0 || editable) && (
+        <>
+          <div className="mt-4 mb-2 flex items-center justify-between gap-2">
+            <p className="flex items-center gap-2 text-[14px] font-extrabold text-title">
+              <span className="h-4 w-1 rounded-full bg-gold" />
+              {t('المرافق العامة')}
             </p>
-            <p className="text-[11px] text-muted">
-              {[u['type'], u['status']].filter(Boolean).map((x) => t(String(x))).join(' · ')}
-            </p>
+            {editable && (
+              <button type="button" onClick={() => setAdding('facilities')} className="flex items-center gap-1 text-[12.5px] font-extrabold text-brand">
+                <Plus className="size-4" />
+                {t('إضافة')}
+              </button>
+            )}
           </div>
+          {annexes.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5">
+              {annexes.map(([k, v]) => (
+                <span key={k} className="rounded-full bg-surface px-3 py-1 text-[12px] font-bold text-ink">
+                  {t(k)} ({String(v)})
+                </span>
+              ))}
+            </div>
+          ) : (
+            <p className="text-[12px] text-muted">{t('لا توجد بيانات حالياً')}</p>
+          )}
+        </>
+      )}
+      {unit && (
+        <UnitSheet
+          asset={asset}
+          unit={unit}
+          editable={editable}
+          onClose={() => setUnit(null)}
+          onEdit={() => {
+            setUnit(null)
+            onEditUnit(unit.type, unitKey(unit))
+          }}
+          onDone={(m) => {
+            setUnit(null)
+            onDone(m)
+          }}
+        />
+      )}
+      {adding && <AddUnitsNow asset={asset} facilitiesOnly={adding === 'facilities'} onClose={() => setAdding(null)} onSaved={() => {}} />}
+    </div>
+  )
+}
+
+/** صفحة الوحدة: بياناتها وأوامرها (تعديل، تجميد، أرشفة) — _onUnitMenuAction. */
+function UnitSheet({ asset, unit, editable, onClose, onEdit, onDone }: { asset: Asset; unit: PropertyUnit; editable: boolean; onClose: () => void; onEdit: () => void; onDone: (m: string) => void }) {
+  const { t } = useI18n()
+  const qc = useQueryClient()
+  const contracts = useUnitContracts()
+  const [archiving, setArchiving] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const key = unitKey(unit)
+  const frozen = unit.status === 'مجمّدة'
+  const run = async (work: () => Promise<void>, message: string) => {
+    setBusy(true)
+    setError('')
+    try {
+      await work()
+      await qc.invalidateQueries({ queryKey: ['assets'] })
+      setArchiving(false)
+      onDone(message)
+    } catch (e) {
+      setError(e instanceof AssetError ? e.message : errorText(e) || 'تعذّر الحفظ. حاول مرة أخرى.')
+    } finally {
+      setBusy(false)
+    }
+  }
+  const action = (label: string, Icon: typeof Pencil, onClick: () => void, danger = false) => (
+    <button type="button" disabled={busy} onClick={onClick} className={`flex h-11 flex-1 items-center justify-center gap-1.5 rounded-inner border border-line bg-white px-2 text-[12.5px] font-extrabold hover:border-brand disabled:opacity-60 ${danger ? 'text-danger' : 'text-ink'}`}>
+      <Icon className="size-4" />
+      {t(label)}
+    </button>
+  )
+  return (
+    <Sheet open onClose={onClose}>
+      <p className="text-[12px] font-bold text-brand">
+        {t(unit.type)} · <span dir="auto">{asset.title}</span>
+      </p>
+      <h3 dir="auto" className="mt-1 text-[19px] font-extrabold text-title">
+        {unit.name || t(unit.type)}
+      </h3>
+      <div className="mt-3">
+        <InfoRow label="الحالة" value={t(unit.status)} />
+        {unitInfoRows(unit).map(([k, v]) => (
+          <InfoRow key={k} label={k} value={v} />
         ))}
       </div>
-    </div>
+      {editable && (
+        <div className="mt-4 flex gap-2">
+          {action('تعديل', Pencil, onEdit)}
+          {action(frozen ? 'إلغاء التجميد' : 'تجميد', Snowflake, () => run(() => toggleUnitFreeze(asset.id, key), frozen ? 'أُلغي تجميد الوحدة' : 'جُمّدت الوحدة'))}
+          {action('أرشفة', Archive, () => {
+            setError('')
+            if (unitHasOpenContract(asset.id, key, contracts.data ?? [])) setError('على الوحدة عقد إيجار قائم — قم بتسويته وإلغائه أولًا ثم أرشف الوحدة.')
+            else setArchiving(true)
+          })}
+        </div>
+      )}
+      {error && !archiving && <p className="mt-3 rounded-inner bg-danger-soft px-3 py-2 text-[12px] font-bold text-danger">{t(error)}</p>}
+      <Confirm
+        open={archiving}
+        title="أرشفة"
+        message={`«${unit.name}» — ${t('ستُنقل الوحدة إلى الأرشيف وتجدها في صفحة «الأرشيف». هل تريد الأرشفة؟')}`}
+        busy={busy}
+        error={error}
+        onConfirm={() => run(() => archiveUnit(asset.id, key, contracts.data ?? []), `${t('أُرشفت')} ${unit.name} — ${t('تجدها في صفحة «الأرشيف»')}`)}
+        onCancel={() => setArchiving(false)}
+      />
+    </Sheet>
   )
 }
 

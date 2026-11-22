@@ -178,7 +178,7 @@ export const joinLogs = (meta: Record<string, string>, logs: string[]) =>
   JSON.stringify(Object.keys(meta).length ? [`${META_PREFIX}${JSON.stringify(meta)}`, ...logs] : logs)
 
 /** _assetToRecord: تاريخ يوم/شهر/سنة ← سنة-شهر-يوم، وغير المفهوم null. */
-const endDateColumn = (display: string) => {
+export const endDateColumn = (display: string) => {
   const iso = isoOf(display)
   return iso ? iso.slice(0, 10) : null
 }
@@ -255,7 +255,7 @@ export function buildAnnexes(rows: { name: string; count: string }[]): Record<st
 }
 
 /** يكتب الصف، وكلما رفض الخادم عمودًا غير موجود استبعده وأعاد (_writeWithColumnFallback). */
-async function withColumnFallback<T>(payload: Record<string, unknown>, write: (body: Record<string, unknown>) => PromiseLike<{ data: T | null; error: unknown }>): Promise<T | null> {
+export async function withColumnFallback<T>(payload: Record<string, unknown>, write: (body: Record<string, unknown>) => PromiseLike<{ data: T | null; error: unknown }>): Promise<T | null> {
   let body = { ...payload }
   for (let attempt = 0; attempt < 10; attempt++) {
     const { data, error } = await write(body)
@@ -270,7 +270,7 @@ async function withColumnFallback<T>(payload: Record<string, unknown>, write: (b
   throw new AssetError('تعذّر حفظ السجل بعد استبعاد الأعمدة المرفوضة.')
 }
 
-async function uid() {
+export async function uid() {
   const { data } = await supabase.auth.getUser()
   const id = data.user?.id
   if (!id) throw new AssetError('سجّل الدخول أولًا')
