@@ -30,6 +30,7 @@ import {
   adminFeesTaxRate,
   adminFeesTaxable,
   cloneLease,
+  contractNumber,
   contractNumbers,
   decodeLease,
   distribute,
@@ -92,8 +93,27 @@ function leaseMetaOf(asset: Asset, unit: PropertyUnit): Row {
   return meta
 }
 
-function initialLease(asset: Asset, unit: PropertyUnit, existing?: UnitContract): Lease {
-  const l = decodeLease(existing?.notes)
+export type Renewal = { notes: string | null; start: Date; end: Date; oldNo: string }
+
+function initialLease(asset: Asset, unit: PropertyUnit, existing?: UnitContract, renewal?: Renewal): Lease {
+  const l = decodeLease(existing?.notes ?? renewal?.notes)
+  // التجديد: نسخة من السابق بلا تواريخه ورقمه وتوقيعه ودفعاته ورسومه.
+  if (!existing && renewal) {
+    const oldNo = (l.contract[K.newNo] ?? '').trim()
+    for (const key of [K.startDate, K.endDate, K.newNo, K.signedAt, K.signedBy]) delete l.contract[key]
+    if (oldNo) l.contract[K.oldNo] = oldNo
+    l.payments = []
+    l.adminFees = []
+    for (const row of l.deposits) {
+      if ((row[K.collectMethod] ?? '').trim() === 'شيك') {
+        delete row[K.paymentChequeDate]
+        delete row[K.paymentDue]
+      }
+    }
+    l.contract[K.startDate] = isoDay(renewal.start)
+    l.contract[K.endDate] = isoDay(renewal.end)
+    if (renewal.oldNo.trim()) l.contract[K.oldNo] = renewal.oldNo.trim()
+  }
   fillPropertyFrom(l, leaseMetaOf(asset, unit))
   if (existing) {
     if (!(l.contract[K.value] ?? '') && Number(existing.annual_rent) > 0) l.contract[K.value] = Number(existing.annual_rent).toFixed(2)
@@ -108,14 +128,14 @@ function initialLease(asset: Asset, unit: PropertyUnit, existing?: UnitContract)
   return l
 }
 
-export function LeaseForm({ asset, unit, propertyType, existing, onClose, onDone }: { asset: Asset; unit: PropertyUnit; propertyType: string; existing?: UnitContract; onClose: () => void; onDone: (message: string) => void }) {
+export function LeaseForm({ asset, unit, propertyType, existing, renewal, onClose, onDone }: { asset: Asset; unit: PropertyUnit; propertyType: string; existing?: UnitContract; renewal?: Renewal; onClose: () => void; onDone: (message: string) => void }) {
   const { t } = useI18n()
   const qc = useQueryClient()
   const contracts = useUnitContracts()
   const store = useStore()
   const key = unitKey(unit)
   const numbers = useMemo(() => contractNumbers((contracts.data ?? []).filter((c) => c.asset_id === asset.id), key, existing), [contracts.data, asset.id, key, existing])
-  const [lease, setLease] = useState<Lease>(() => initialLease(asset, unit, existing))
+  const [lease, setLease] = useState<Lease>(() => initialLease(asset, unit, existing, renewal))
   // _fillContractNumbers: بعد تحميل العقود، مرة واحدة.
   const loaded = contracts.isSuccess
   useEffect(() => {
@@ -129,7 +149,7 @@ export function LeaseForm({ asset, unit, propertyType, existing, onClose, onDone
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded])
-  const oldLocked = !!numbers.previous && !!(lease.contract[K.oldNo] ?? '').trim()
+  const oldLocked = (!!numbers.previous || !!renewal?.oldNo.trim()) && !!(lease.contract[K.oldNo] ?? '').trim()
   const update = (fn: (l: Lease) => void) =>
     setLease((prev) => {
       const next = cloneLease(prev)
@@ -454,7 +474,13 @@ export function LeaseForm({ asset, unit, propertyType, existing, onClose, onDone
       await setUnitStatus(asset.id, key, saved.status === 'pending' ? 'مسودة' : 'مؤجرة').catch(() => {})
       await Promise.all(['assets', 'unit-contracts', 'unit-payments', 'store'].map((k) => qc.invalidateQueries({ queryKey: [k] })))
       const missing = missingRequired(l)
-      const base = draft ? (missing.length ? `${t('حُفظ العقد كمسودة — ينقصه:')} ${missing.map((m) => t(m)).join('، ')}` : t('حُفظ العقد كمسودة.')) : t('تم حفظ العقد')
+      const base = draft
+        ? missing.length
+          ? `${t('حُفظ العقد كمسودة — ينقصه:')} ${missing.map((m) => t(m)).join('، ')}`
+          : t('حُفظ العقد كمسودة.')
+        : renewal
+          ? `${t('تم تجديد العقد بنجاح — رقم العقد الجديد')} ${contractNumber(saved)} (${t('السابق')} ${renewal.oldNo})`
+          : t('تم حفظ العقد')
       onDone(paymentsIssue ? `${base}\n${t('حُفظ العقد، وتعذّر توليد الدفعات الآن')} (${paymentsIssue})` : base)
     } catch (e) {
       setReview(null)
@@ -464,7 +490,7 @@ export function LeaseForm({ asset, unit, propertyType, existing, onClose, onDone
     }
   }
 
-  const title = existing ? 'عقد الإيجار' : 'عقد الإيجار'
+  const title = renewal ? 'تجديد العقد' : 'عقد الإيجار'
   const payDue = (row: Row) => {
     const cheque = (row[K.collectMethod] ?? '') === 'شيك' ? (row[K.paymentChequeDate] ?? '').trim() : ''
     const due = cheque || (row[K.paymentDue] ?? '').trim()
@@ -637,7 +663,7 @@ export function LeaseForm({ asset, unit, propertyType, existing, onClose, onDone
             </button>
             <button type="button" disabled={busy} onClick={() => startSave(false)} className="flex h-12 flex-1 items-center justify-center gap-2 rounded-field bg-brand text-[14px] font-extrabold text-white hover:bg-brand-dark disabled:opacity-60">
               {busy && <Loader2 className="size-4 animate-spin" />}
-              {t(busy ? 'جارٍ الحفظ...' : 'حفظ العقد')}
+              {t(busy ? 'جارٍ الحفظ...' : renewal ? 'تجديد العقد' : 'حفظ العقد')}
             </button>
           </div>
         </div>

@@ -12,17 +12,18 @@ import { Chip, Empty, ErrorBox, InfoRow, Loading, PageHeader, SearchField, Secti
 import { EntryCard } from '@/components/EntryCard'
 import { Confirm } from '@/components/Confirm'
 import { AssetEntryForm } from '@/components/AssetEntryForm'
-import { ASSET_GROUPS_W, AssetError, FILE_FIELD, canDeleteEntry, deleteEntry, groupOf, isCheque, settlePayment, type AssetGroup } from '@/lib/assetWrite'
+import { ASSET_GROUPS_W, AssetError, FILE_FIELD, canDeleteEntry, deleteEntry, groupOf, type AssetGroup } from '@/lib/assetWrite'
 import { errorText } from '@/lib/supabase'
 import { VehicleForm, VehicleTypePicker } from '@/components/VehicleForm'
 import { vehicleClassOf, vehicleDraftOf, vehicleTypeOf } from '@/lib/vehicleWrite'
 import { archiveAsset, cancelAsset, cancelBlockedMessage, isCancelledAsset } from '@/lib/assetStatus'
 import { PropertyWizard } from '@/components/PropertyWizard'
 import { AddUnitsNow, PropertyEditor } from '@/components/PropertyEditor'
+import { SettleRent } from '@/components/SettleRent'
 import { unitIcon } from '@/components/PropertyParts'
 import { PROPERTY_TYPE_KEY, archiveUnit, decodeUnits, toggleUnitFreeze, unitHasOpenContract, unitInfoRows, unitIsLive, unitKey, type PropertyUnit } from '@/lib/propertyWrite'
-import { LeaseForm } from '@/components/LeaseForm'
-import { contractNumber, maintBlocksLease, pretty } from '@/lib/lease'
+import { LeaseForm, type Renewal } from '@/components/LeaseForm'
+import { CancelContractFlow, UnitLeaseBox, currentContract } from '@/components/UnitLease'
 import { splitLogs as splitAssetLogs } from '@/lib/vehicleWrite'
 
 // أسماء الفئات في لوحة التحكم (VISIBILITY_PAGES ← assets).
@@ -523,7 +524,7 @@ function AssetUnits({ asset, onEditUnit, onDone }: { asset: Asset; onEditUnit: (
   const units = decodeUnits(asset.units_json).filter(unitIsLive)
   const [unit, setUnit] = useState<PropertyUnit | null>(null)
   const [adding, setAdding] = useState<'units' | 'facilities' | null>(null)
-  const [leasing, setLeasing] = useState<{ unit: PropertyUnit; existing?: UnitContract } | null>(null)
+  const [leasing, setLeasing] = useState<{ unit: PropertyUnit; existing?: UnitContract; renewal?: Renewal } | null>(null)
   const property = asset.category === 'real_estate'
   const editable = property && !isCancelledAsset(asset) && asset.status !== ARCHIVED
   const annexes = Object.entries((asset.annexes ?? {}) as Record<string, unknown>).filter(([, v]) => Number(v) > 0)
@@ -602,6 +603,10 @@ function AssetUnits({ asset, onEditUnit, onDone }: { asset: Asset; onEditUnit: (
             setLeasing({ unit, existing })
             setUnit(null)
           }}
+          onRenew={(_, renewal) => {
+            setLeasing({ unit, renewal })
+            setUnit(null)
+          }}
           onDone={(m) => {
             setUnit(null)
             onDone(m)
@@ -615,6 +620,7 @@ function AssetUnits({ asset, onEditUnit, onDone }: { asset: Asset; onEditUnit: (
           unit={leasing.unit}
           propertyType={splitAssetLogs(asset.logs_json).meta[PROPERTY_TYPE_KEY] ?? ''}
           existing={leasing.existing}
+          renewal={leasing.renewal}
           onClose={() => setLeasing(null)}
           onDone={(m) => {
             setLeasing(null)
@@ -627,15 +633,34 @@ function AssetUnits({ asset, onEditUnit, onDone }: { asset: Asset; onEditUnit: (
 }
 
 /** صفحة الوحدة: بياناتها وأوامرها (تعديل، تجميد، أرشفة) — _onUnitMenuAction. */
-function UnitSheet({ asset, unit, editable, onClose, onEdit, onLease, onDone }: { asset: Asset; unit: PropertyUnit; editable: boolean; onClose: () => void; onEdit: () => void; onLease: (existing?: UnitContract) => void; onDone: (m: string) => void }) {
+function UnitSheet({
+  asset,
+  unit,
+  editable,
+  onClose,
+  onEdit,
+  onLease,
+  onRenew,
+  onDone,
+}: {
+  asset: Asset
+  unit: PropertyUnit
+  editable: boolean
+  onClose: () => void
+  onEdit: () => void
+  onLease: (existing?: UnitContract) => void
+  onRenew: (contract: UnitContract, renewal: Renewal) => void
+  onDone: (m: string) => void
+}) {
   const { t } = useI18n()
   const qc = useQueryClient()
   const contracts = useUnitContracts()
   const allPayments = useUnitPayments()
   // العقد الحالي للوحدة: أحدث عقد غير ملغى (_load).
-  const contract = (contracts.data ?? []).find((c) => c.asset_id === asset.id && c.unit_key === unitKey(unit) && c.status !== 'cancelled')
+  const contract = currentContract(contracts.data ?? [], asset, unit)
   const contractPayments = contract ? (allPayments.data ?? []).filter((p) => p.contract_id === contract.id) : []
-  const [leaseError, setLeaseError] = useState('')
+  // أرشفة وحدة عليها عقد قائم: إلغاؤه بالتسوية أولًا ثم الأرشفة (_onUnitMenuAction).
+  const [cancelFirst, setCancelFirst] = useState(false)
   const [archiving, setArchiving] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -681,57 +706,30 @@ function UnitSheet({ asset, unit, editable, onClose, onEdit, onLease, onDone }: 
           {action(frozen ? 'إلغاء التجميد' : 'تجميد', Snowflake, () => run(() => toggleUnitFreeze(asset.id, key), frozen ? 'أُلغي تجميد الوحدة' : 'جُمّدت الوحدة'))}
           {action('أرشفة', Archive, () => {
             setError('')
-            if (unitHasOpenContract(asset.id, key, contracts.data ?? [])) setError('على الوحدة عقد إيجار قائم — قم بتسويته وإلغائه أولًا ثم أرشف الوحدة.')
+            if (contract && unitHasOpenContract(asset.id, key, contracts.data ?? [])) setCancelFirst(true)
             else setArchiving(true)
           })}
         </div>
       )}
       {error && !archiving && <p className="mt-3 rounded-inner bg-danger-soft px-3 py-2 text-[12px] font-bold text-danger">{t(error)}</p>}
-      <div className="mt-5">
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <p className="flex items-center gap-2 text-[14px] font-extrabold text-title">
-            <span className="h-4 w-1 rounded-full bg-gold" />
-            {t('إدارة الإيجار')}
-          </p>
-          {editable && !contract && (
-            <button
-              type="button"
-              onClick={() => {
-                setLeaseError('')
-                if (maintBlocksLease(unit.extras)) setLeaseError('الوحدة تحت صيانة تمنع التأجير — سجّل «انتهاء الصيانة» من قسم الصيانة أولًا.')
-                else onLease()
-              }}
-              className="flex items-center gap-1 rounded-full bg-brand px-3 py-1.5 text-[12px] font-extrabold text-white"
-            >
-              <Plus className="size-4" />
-              {t('تأجير الوحدة')}
-            </button>
-          )}
-        </div>
-        {leaseError && <p className="mb-2 rounded-inner bg-danger-soft px-3 py-2 text-[12px] font-bold text-danger">{t(leaseError)}</p>}
-        {!contract ? (
-          <p className="rounded-inner bg-surface px-3 py-3 text-[12.5px] text-sub">{t(editable ? 'اضغط + لبدء عملية التأجير وإنشاء عقد.' : 'لا توجد بيانات حالياً')}</p>
-        ) : (
-          <div className="rounded-inner border border-line p-3">
-            <InfoRow label="رقم العقد" value={contractNumber(contract)} />
-            <InfoRow label="المستأجر" value={contract.tenant_name} />
-            <InfoRow label="مدة العقد" value={[contract.start_date && pretty(contract.start_date), contract.end_date && pretty(contract.end_date)].filter(Boolean).join(' — ')} />
-            <InfoRow label="قيمة العقد" value={Number(contract.annual_rent) > 0 ? Number(contract.annual_rent).toFixed(2) : ''} />
-            <InfoRow label="الحالة" value={t(CONTRACT_STATUS[contract.status] ?? contract.status)} />
-            {contractPayments.length > 0 && <InfoRow label="الدفعات" value={`${contractPayments.filter((p) => p.status === 'paid').length} / ${contractPayments.length}`} />}
-            {contract.status === 'pending' && editable && (
-              <button type="button" onClick={() => onLease(contract)} className="mt-2 w-full rounded-inner bg-gold/15 px-3 py-2.5 text-start text-[12px] font-bold leading-relaxed text-gold-dark">
-                {t('هذا العقد محفوظ كمسودة لنقص بعض بياناته — اضغط هنا لإكماله وتأكيد حفظه.')}
-              </button>
-            )}
-            {editable && (
-              <button type="button" onClick={() => onLease(contract)} className="mt-2 h-11 w-full rounded-field bg-brand text-[13px] font-extrabold text-white hover:bg-brand-dark">
-                {t('العقد كامل')}
-              </button>
-            )}
-          </div>
-        )}
-      </div>
+      <UnitLeaseBox asset={asset} unit={unit} editable={editable} onLease={onLease} onRenew={onRenew} onDone={onDone} />
+      {cancelFirst && contract && (
+        <CancelContractFlow
+          asset={asset}
+          unit={unit}
+          contract={contract}
+          payments={contractPayments}
+          confirmed
+          onClose={() => setCancelFirst(false)}
+          onDone={() => {
+            setCancelFirst(false)
+            void run(
+              () => archiveUnit(asset.id, key, (contracts.data ?? []).filter((c) => c.id !== contract.id)),
+              `${t('أُرشفت')} ${unit.name} — ${t('تجدها في صفحة «الأرشيف»')}`,
+            )
+          }}
+        />
+      )}
       <Confirm
         open={archiving}
         title="أرشفة"
@@ -832,64 +830,3 @@ function AssetContracts({ asset }: { asset: Asset }) {
 }
 
 /** «نوع السداد»: كامل بالمتبقي أو جزئي بمبلغ مستلم (الشيك كامل فقط). */
-function SettleRent({ payment, currency, onClose, onDone }: { payment: UnitPayment; currency: string; onClose: () => void; onDone: (m: string) => void }) {
-  const { t } = useI18n()
-  const qc = useQueryClient()
-  const remaining = Number(payment.amount_due) - Number(payment.amount_paid)
-  const cheque = isCheque(payment)
-  const [mode, setMode] = useState<'full' | 'partial' | null>(cheque ? 'full' : null)
-  const [amount, setAmount] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  async function save() {
-    setBusy(true)
-    setError('')
-    try {
-      const settled = await settlePayment(payment, mode === 'partial' ? amount : null)
-      await qc.invalidateQueries({ queryKey: ['unit-payments'] })
-      onDone(settled ? 'تم تسجيل السداد الكامل' : 'تم تسجيل سداد جزئي')
-    } catch (e) {
-      setError(e instanceof AssetError ? e.message : errorText(e) || 'تعذر تسجيل السداد')
-    } finally {
-      setBusy(false)
-    }
-  }
-  const option = (on: boolean) => `rounded-inner border px-3 py-2.5 text-start ${on ? 'border-brand bg-brand-soft' : 'border-line bg-white'}`
-  return (
-    <Sheet open onClose={onClose}>
-      <p className="text-[18px] font-extrabold text-title">{t('نوع السداد')}</p>
-      <p className="mt-0.5 text-[12px] text-muted">
-        {date(payment.due_date)} · {t('المتبقي')}: {money(remaining, t(currency))}
-      </p>
-      <div className="mt-4 flex flex-col gap-2">
-        <button type="button" onClick={() => setMode('full')} className={option(mode === 'full')}>
-          <p className="text-[13.5px] font-extrabold text-title">{t('سداد كامل')}</p>
-          <p className="text-[11.5px] text-sub">
-            {t('المتبقي')}: {money(remaining, t(currency))}
-          </p>
-        </button>
-        {!cheque && (
-          <button type="button" onClick={() => setMode('partial')} className={option(mode === 'partial')}>
-            <p className="text-[13.5px] font-extrabold text-title">{t('سداد جزئي')}</p>
-            <p className="text-[11.5px] text-sub">{t('تبقى الدفعة مفتوحة بالمبلغ المتبقي')}</p>
-          </button>
-        )}
-        {mode === 'partial' && (
-          <label className="flex flex-col gap-1">
-            <span className="text-[12px] font-bold text-sub">{t('المبلغ المستلم')}</span>
-            <input dir="ltr" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} className="h-12 w-full rounded-field border border-line bg-field px-3 text-[13.5px] font-bold text-title outline-none focus:border-gold" />
-          </label>
-        )}
-      </div>
-      {error && <p className="mt-3 rounded-inner bg-danger-soft px-3 py-2 text-[12px] font-bold text-danger">{t(error)}</p>}
-      <button
-        type="button"
-        disabled={!mode || busy || (mode === 'partial' && !(parseFloat(amount) > 0))}
-        onClick={save}
-        className="mt-5 flex w-full items-center justify-center rounded-field bg-brand py-3.5 text-[15px] font-extrabold text-white hover:bg-brand-dark disabled:opacity-50"
-      >
-        {t('تسجيل السداد')}
-      </button>
-    </Sheet>
-  )
-}
