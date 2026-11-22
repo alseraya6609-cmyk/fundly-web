@@ -214,3 +214,11 @@ export async function settlePayment(p: UnitPayment, paidNowText: string | null):
   if (!data || !data.length) throw new AssetError('تغيّرت البيانات أثناء الحفظ — أعد المحاولة')
   return settled
 }
+
+/** _addNewContractDocument: مستند جديد في «المستندات» للأصل نفسه (نوعه «عقود»). */
+export async function addContractDocument(assetId: string, name: string, path: string) {
+  const user = await uid()
+  const data = { 'اسم المستند': name.trim(), 'نوع المستند': 'عقود', [FILE_FIELD]: path }
+  const { error } = await supabase.from('project_asset_entries').insert({ user_id: user, asset_id: assetId, kind: 'document', data, attachment_url: null })
+  if (error) throw error
+}

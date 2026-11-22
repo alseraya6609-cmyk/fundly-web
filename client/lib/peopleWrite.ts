@@ -284,7 +284,7 @@ async function mutate(change: (list: Item[]) => Item[]): Promise<void> {
 
 const nameOf = (x: Item) => String(x.fullName ?? '').trim()
 
-export async function createPerson(f: PersonForm): Promise<void> {
+export async function createPerson(f: PersonForm, linkDetails?: Record<string, string>): Promise<void> {
   const entity = isEntityKey(f.typeKey)
   const type = PERSON_TYPES.find((t) => t.key === f.typeKey)
   if (!type) throw new PeopleError(entity ? 'اختر نوع الجهة' : 'اختر النوع')
@@ -301,6 +301,7 @@ export async function createPerson(f: PersonForm): Promise<void> {
       'معلومات إضافية': f.extra.trim(),
     }
     Object.assign(details, docDetails(f, entity))
+    if (linkDetails) Object.assign(details, linkDetails)
     const stamp = today()
     const person: Item = {
       fullName: name,

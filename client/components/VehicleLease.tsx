@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { CalendarClock, Maximize2, Plus, RefreshCw, XCircle } from 'lucide-react'
+import { CalendarClock, FileSpreadsheet, Maximize2, Plus, ReceiptText, RefreshCw, XCircle } from 'lucide-react'
 import { cn, money } from '@/lib/format'
 import { useI18n } from '@/lib/i18n'
 import { useCurrency, type Asset, type UnitContract, type UnitPayment } from '@/lib/data'
@@ -12,6 +12,7 @@ import type { Renewal, VehicleMode } from './LeaseForm'
 import { ActionTile, CancelContractFlow, DuesBox, ExtendFlow, PaymentForm } from './UnitLease'
 import { SettleRent } from './SettleRent'
 import { useLeasePrint } from './LeasePrint'
+import { TextShareSheet, vehicleDocumentText } from './AssetExtras'
 
 /*
   «إدارة التأجير» للمركبة (_equipmentRentalSection في projects_activities_screen.dart):
@@ -122,6 +123,7 @@ export function VehicleLeaseBox({
   const [paying, setPaying] = useState<UnitPayment | null>(null)
   const [editingPay, setEditingPay] = useState<{ existing: UnitPayment | null } | null>(null)
   const [notice, setNotice] = useState('')
+  const [doc, setDoc] = useState<{ title: string; text: string } | null>(null)
   const flash = (m: string) => {
     setNotice(m)
     window.setTimeout(() => setNotice(''), 4000)
@@ -223,6 +225,25 @@ export function VehicleLeaseBox({
       </div>
 
       <DuesBox payments={payments} editable={editable} open={contract.status !== 'cancelled'} canAdd={canAdd} onPay={setPaying} onEdit={(p) => setEditingPay({ existing: p })} />
+      <div className="mt-2 grid grid-cols-2 gap-2">
+        {([
+          [true, 'سند قبض', ReceiptText],
+          [false, 'مطالبة مالية', FileSpreadsheet],
+        ] as const).map(([receipt, label, Icon]) => (
+          <ActionTile
+            key={label}
+            icon={Icon}
+            label={label}
+            onClick={() => {
+              const text = vehicleDocumentText(asset, contract, payments, receipt, t(currency), t)
+              if (!text) return setError(receipt ? 'لا توجد مبالغ مسددة بعد' : 'لا توجد مبالغ مستحقة')
+              setError('')
+              setDoc({ title: label, text })
+            }}
+          />
+        ))}
+      </div>
+      {doc && <TextShareSheet title={doc.title} text={doc.text} onClose={() => setDoc(null)} />}
 
       {operator && (
         <div className="mt-3 rounded-inner bg-surface px-3 py-2">

@@ -321,3 +321,26 @@ export async function saveActivityBasics(assetId: string, v: { title: string; lo
   }
   throw new AssetError('تغيّر السجل أثناء الحفظ — أعد المحاولة')
 }
+
+/**
+  _addActivityAsset: «إضافة أصل أو معدة» (أو «إضافة إكسسوار» للمركبة) — في
+  ملحقات الأصل نفسه، والعدد يُضاف إلى الموجود بالاسم نفسه.
+*/
+export async function addAnnex(assetId: string, name: string, count: number) {
+  const label = name.trim()
+  if (!label) throw new AssetError('اكتب الاسم')
+  const n = count <= 0 ? 1 : Math.trunc(count)
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const { data, error } = await supabase.from('project_assets').select('id, annexes, updated_at').eq('id', assetId).maybeSingle()
+    if (error) throw error
+    const fresh = data as { id: string; annexes: Record<string, unknown> | null; updated_at: string } | null
+    if (!fresh) throw new AssetError('السجل غير موجود — ربما عُدّل أو حُذف من التطبيق')
+    const merged: Record<string, number> = {}
+    for (const [k, v] of Object.entries(fresh.annexes ?? {})) merged[k] = Math.trunc(Number(v) || 0)
+    merged[label] = (merged[label] ?? 0) + n
+    const { data: saved, error: saveError } = await supabase.from('project_assets').update({ annexes: merged }).eq('id', assetId).eq('updated_at', fresh.updated_at).select('id')
+    if (saveError) throw saveError
+    if (saved && saved.length) return
+  }
+  throw new AssetError('تغيّر السجل أثناء الحفظ — أعد المحاولة')
+}

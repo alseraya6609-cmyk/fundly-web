@@ -141,7 +141,7 @@ function DocBlock({ doc, entity, onChange, onRemove }: { doc: DocForm; entity: b
   )
 }
 
-function Body({ person, entity, onDone }: { person?: Person; entity: boolean; onDone: (message: string) => void }) {
+function Body({ person, entity, onDone, linkDetails }: { person?: Person; entity: boolean; onDone: (message: string) => void; linkDetails?: Record<string, string> }) {
   const { t } = useI18n()
   const qc = useQueryClient()
   const shown = useMemo(() => formOf(person, entity), [person, entity])
@@ -168,7 +168,7 @@ function Body({ person, entity, onDone }: { person?: Person; entity: boolean; on
     setSaveError('')
     try {
       if (person) await updatePerson(person, shown, f)
-      else await createPerson(f)
+      else await createPerson(f, linkDetails)
       await qc.invalidateQueries({ queryKey: ['store'] })
       setConfirming(false)
       onDone(person ? 'تم تحديث بيانات الشخص' : 'تم الحفظ بنجاح')
@@ -322,7 +322,8 @@ function Body({ person, entity, onDone }: { person?: Person; entity: boolean; on
 }
 
 /** إضافة: اختيار فرد أو جهة ثم النموذج. تعديل: النموذج مباشرة. */
-export function PersonEditor({ open, person, onClose, onSaved }: { open: boolean; person?: Person; onClose: () => void; onSaved: (message: string) => void }) {
+/** linkDetails: تفاصيل تُضاف للفرد الجديد (الأصل المرتبط مثلًا) كما في التطبيق. */
+export function PersonEditor({ open, person, onClose, onSaved, linkDetails }: { open: boolean; person?: Person; onClose: () => void; onSaved: (message: string) => void; linkDetails?: Record<string, string> }) {
   const { t } = useI18n()
   const [entity, setEntity] = useState<boolean | null>(null)
   useEffect(() => {
@@ -351,7 +352,7 @@ export function PersonEditor({ open, person, onClose, onSaved }: { open: boolean
           </div>
         </div>
       ) : (
-        <Body key={`${entity}-${person?.fullName ?? 'new'}`} person={person} entity={entity} onDone={onSaved} />
+        <Body key={`${entity}-${person?.fullName ?? 'new'}`} person={person} entity={entity} onDone={onSaved} linkDetails={linkDetails} />
       )}
     </Sheet>
   )

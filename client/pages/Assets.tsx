@@ -30,6 +30,7 @@ import { contractClosed } from '@/lib/leaseActions'
 import { ActivityLeaseBox, activityPrefill, branchPrefill } from '@/components/ActivityLease'
 import { ActivityBranches, ActivityEditSheet, ActivityEmployees } from '@/components/ActivityParts'
 import { VehicleLeaseBox, vehicleLeaseMode, vehicleTermsTemplate } from '@/components/VehicleLease'
+import { AnnexesBox, AssetPeopleBox } from '@/components/AssetExtras'
 import { branchesOf, isBranch } from '@/lib/activityWrite'
 import { ACTIVITY_TYPES } from '@/lib/lease'
 import { splitLogs as splitAssetLogs } from '@/lib/vehicleWrite'
@@ -261,16 +262,14 @@ export default function Assets() {
             {assetGroup(open.category) === 'activity' && (
               <ActivityEmployees asset={open} editable={!isCancelledAsset(open) && open.status !== ARCHIVED && canWrite(openDelegation)} canRemove={canDelete(openDelegation)} onDone={flash} />
             )}
+            {(assetGroup(open.category) === 'activity' || assetGroup(open.category) === 'equipment') && (
+              <AnnexesBox asset={open} vehicle={assetGroup(open.category) === 'equipment'} editable={!isCancelledAsset(open) && open.status !== ARCHIVED && canWrite(openDelegation)} onDone={flash} />
+            )}
+            <AssetPeopleBox asset={open} editable={!isCancelledAsset(open) && open.status !== ARCHIVED && !openDelegation} onDone={flash} />
             <AssetContracts asset={open} delegation={openDelegation} />
             <AssetRecords asset={open} delegation={openDelegation} onChanged={(m) => (setParams({}), flash(m))} />
             <p className="mt-5 rounded-inner bg-surface px-4 py-3 text-[12px] text-sub">
-              {t(
-                assetGroup(open.category) === 'equipment'
-                  ? 'سند القبض والمطالبة المالية للمركبة من التطبيق حاليًا.'
-                  : open.category === 'real_estate'
-                    ? 'مستندات العقار المرفقة بالعقد من التطبيق حاليًا.'
-                    : 'أصول النشاط ومعداته وعملاؤه وموردوه من التطبيق حاليًا.',
-              )}
+              {t(openDelegation ? 'ما تحفظه هنا يُحفظ باسم المالك ويصله إشعاره.' : 'التعديل هنا يحفظ في حسابك ويظهر في التطبيق.')}
             </p>
           </div>
         )}

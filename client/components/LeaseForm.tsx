@@ -77,6 +77,7 @@ import {
   type Row,
 } from '@/lib/lease'
 import { Confirm } from './Confirm'
+import { ContractDocsBox } from './ContractDocs'
 import { leasePrintTitle, useLeasePrint } from './LeasePrint'
 import { Sheet } from './ui'
 
@@ -821,6 +822,20 @@ export function LeaseForm({
           {section('بيانات المستأجر', User, 'tenant', TENANT_FIELDS, K.name)}
           {!activity && !vehicle && section('بيانات ممثل المستأجر', User, 'rep', REP_FIELDS, K.repName)}
           {vehicle && section('شروط التأجير', ListChecks, 'contract', VEHICLE_TERMS_FIELDS)}
+          {/* مستندات العقار/المركبة (شروطك مثلًا) تُختار وتُرفق بالعقد. */}
+          {asset && (
+            <ContractDocsBox
+              assetId={asset.id}
+              label={vehicle ? (vehicle.vehicleClass === 'مركبات بحرية' ? 'مستندات المركبة البحرية' : 'مستندات المركبة البرية') : 'مستندات العقار'}
+              value={lease.contract[K.attachedDocs] ?? ''}
+              onChange={(v) =>
+                update((l) => {
+                  if (v.trim()) l.contract[K.attachedDocs] = v
+                  else delete l.contract[K.attachedDocs]
+                })
+              }
+            />
+          )}
           {rowsCard({
             title: 'قيمة التأمين على العين',
             Icon: Shield,
