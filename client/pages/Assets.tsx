@@ -1,14 +1,22 @@
 import { useMemo, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
-import { Building2, LayoutGrid } from 'lucide-react'
+import { Archive, Ban, Building2, CheckCircle2, LayoutGrid, MoreVertical, Pencil, Plus, Trash2 } from 'lucide-react'
 import { useI18n } from '@/lib/i18n'
 import { moduleHidden, useSession } from '@/lib/session'
-import { ARCHIVED, assetMeta, assetUnits, useAssetEntries, useAssets, useCurrency, useUnitContracts, useUnitPayments, type Asset, type AssetEntry } from '@/lib/data'
+import { ARCHIVED, assetMeta, assetUnits, useAssetEntries, useAssets, useCurrency, useUnitContracts, useUnitPayments, type Asset, type AssetEntry, type UnitPayment } from '@/lib/data'
 import { ASSET_GROUPS, MODULE_COLORS, assetGroup } from '@/lib/catalog'
 import { date, matches, money } from '@/lib/format'
 import { FileButton } from '@/components/FileButton'
 import { Chip, Empty, ErrorBox, InfoRow, Loading, PageHeader, SearchField, SectionTitle, Sheet } from '@/components/ui'
 import { EntryCard } from '@/components/EntryCard'
+import { Confirm } from '@/components/Confirm'
+import { AssetEntryForm } from '@/components/AssetEntryForm'
+import { ASSET_GROUPS_W, AssetError, FILE_FIELD, canDeleteEntry, deleteEntry, groupOf, isCheque, settlePayment, type AssetGroup } from '@/lib/assetWrite'
+import { errorText } from '@/lib/supabase'
+import { VehicleForm, VehicleTypePicker } from '@/components/VehicleForm'
+import { vehicleClassOf, vehicleDraftOf, vehicleTypeOf } from '@/lib/vehicleWrite'
+import { archiveAsset, cancelAsset, cancelBlockedMessage, isCancelledAsset } from '@/lib/assetStatus'
 
 // أسماء الفئات في لوحة التحكم (VISIBILITY_PAGES ← assets).
 const ADMIN_TITLE: Record<string, string> = {
@@ -24,6 +32,11 @@ export default function Assets() {
   const [params, setParams] = useSearchParams()
   const [filter, setFilter] = useState('all')
   const [search, setSearch] = useState('')
+  const [notice, setNotice] = useState('')
+  const flash = (message: string) => {
+    setNotice(message)
+    window.setTimeout(() => setNotice(''), 4000)
+  }
 
   const groups = ASSET_GROUPS.filter((g) => !ADMIN_TITLE[g.key] || !hidden.has(`category:assets:${ADMIN_TITLE[g.key]}`))
   // المؤرشف مكانه الأرشيف.
@@ -38,6 +51,9 @@ export default function Assets() {
     [all, filter, search],
   )
   const open = all.find((a) => a.id === params.get('open'))
+  const [picking, setPicking] = useState(false)
+  const [vehicle, setVehicle] = useState<{ vehicleClass: string; vehicleType: string; asset?: Asset } | null>(null)
+  const canAddVehicle = groups.some((g) => g.key === 'equipment')
 
   if (moduleHidden(hidden, 'assets')) {
     return (
@@ -56,7 +72,23 @@ export default function Assets() {
         title="العقارات / الأنشطة التجارية / المركبات ووسائل النقل"
         subtitle="إدارة ومتابعة كل ما يتعلق بالأصول والاستثمار"
       />
-      <SearchField value={search} onChange={setSearch} placeholder="بحث" />
+      {notice && (
+        <p className="mb-3 flex items-center gap-2 rounded-inner bg-brand-soft px-4 py-3 text-[13px] font-bold text-brand">
+          <CheckCircle2 className="size-4" />
+          {t(notice)}
+        </p>
+      )}
+      <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <SearchField value={search} onChange={setSearch} placeholder="بحث" />
+        </div>
+        {canAddVehicle && (
+          <button type="button" onClick={() => setPicking(true)} className="mb-3 flex h-11 shrink-0 items-center gap-1 rounded-inner bg-brand px-3 text-[12.5px] font-extrabold text-white hover:bg-brand-dark">
+            <Plus className="size-4" />
+            {t('إضافة مركبة')}
+          </button>
+        )}
+      </div>
 
       <SectionTitle>{t('الفئات')}</SectionTitle>
       <div className="flex flex-wrap gap-2">
@@ -101,7 +133,21 @@ export default function Assets() {
             <p className="text-[12px] font-bold" style={{ color: ASSET_GROUPS.find((g) => g.key === assetGroup(open.category))?.color }}>
               {t(ASSET_GROUPS.find((g) => g.key === assetGroup(open.category))?.label ?? '')}
             </p>
-            <h2 className="mt-1 text-[20px] font-extrabold text-title">{open.title}</h2>
+            <div className="mt-1 flex items-start justify-between gap-2">
+              <h2 className="text-[20px] font-extrabold text-title">{open.title}</h2>
+              <AssetMenu
+                asset={open}
+                onEdit={
+                  assetGroup(open.category) === 'equipment' && !isCancelledAsset(open)
+                    ? () => setVehicle({ vehicleClass: vehicleClassOf(open), vehicleType: vehicleTypeOf(open), asset: open })
+                    : undefined
+                }
+                onDone={(m, leave) => {
+                  if (leave) setParams({})
+                  flash(m)
+                }}
+              />
+            </div>
             <div className="mt-4">
               <InfoRow label="النوع" value={t(open.sub_type)} />
               <InfoRow label="الموقع" value={open.location_or_type} />
@@ -122,14 +168,137 @@ export default function Assets() {
             </div>
             <AssetUnits asset={open} />
             <AssetContracts asset={open} />
-            <AssetRecords asset={open} />
+            <AssetRecords asset={open} onChanged={(m) => (setParams({}), flash(m))} />
             <p className="mt-5 rounded-inner bg-surface px-4 py-3 text-[12px] text-sub">
-              {t('التعديل والإضافة من التطبيق حاليًا. الموقع للعرض في هذه المرحلة.')}
+              {t(
+                assetGroup(open.category) === 'equipment'
+                  ? 'عقود تأجير المركبة والتفويض من التطبيق حاليًا.'
+                  : 'تعديل بيانات العقار والنشاط ووحداته وعقوده من التطبيق حاليًا.',
+              )}
             </p>
           </div>
         )}
       </Sheet>
+      {picking && (
+        <VehicleTypePicker
+          onClose={() => setPicking(false)}
+          onPick={(vehicleClass, vehicleType) => {
+            setPicking(false)
+            setVehicle({ vehicleClass, vehicleType })
+          }}
+        />
+      )}
+      {vehicle && (
+        <VehicleForm
+          vehicleClass={vehicle.vehicleClass}
+          vehicleType={vehicle.vehicleType}
+          initial={vehicle.asset ? vehicleDraftOf(vehicle.asset) : undefined}
+          assetId={vehicle.asset?.id}
+          onClose={() => setVehicle(null)}
+          onDone={(m) => {
+            setVehicle(null)
+            if (vehicle.asset) setParams({})
+            else setFilter('equipment')
+            flash(m)
+          }}
+        />
+      )}
     </div>
+  )
+}
+
+/** قائمة الثلاث نقاط: تعديل (المركبة)، إلغاء، أرشفة — بتأكيد كما في التطبيق. */
+function AssetMenu({ asset, onEdit, onDone }: { asset: Asset; onEdit?: () => void; onDone: (message: string, leave: boolean) => void }) {
+  const { t } = useI18n()
+  const qc = useQueryClient()
+  const contracts = useUnitContracts()
+  const [menu, setMenu] = useState(false)
+  const [action, setAction] = useState<'cancel' | 'archive' | null>(null)
+  const [blocked, setBlocked] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  if (asset.status === ARCHIVED) return null
+  const cancelled = isCancelledAsset(asset)
+  const item = (label: string, Icon: typeof Pencil, onClick: () => void, danger = false) => (
+    <button
+      type="button"
+      onClick={() => {
+        setMenu(false)
+        onClick()
+      }}
+      className={`flex h-12 items-center gap-2 rounded-inner border border-line bg-white px-3 text-[13.5px] font-bold hover:border-brand ${danger ? 'text-danger' : 'text-ink'}`}
+    >
+      <Icon className="size-4" />
+      {t(label)}
+    </button>
+  )
+  return (
+    <>
+      <button type="button" aria-label={t('خيارات')} onClick={() => setMenu(true)} className="flex size-9 shrink-0 items-center justify-center rounded-full bg-surface text-sub hover:text-brand">
+        <MoreVertical className="size-5" />
+      </button>
+      <Sheet open={menu} onClose={() => setMenu(false)}>
+        <p className="text-[18px] font-extrabold text-title">{t('خيارات')}</p>
+        <p className="mt-0.5 text-[12px] text-muted" dir="auto">
+          {asset.title}
+        </p>
+        <div className="mt-4 flex flex-col gap-2">
+          {onEdit && item('تعديل بيانات', Pencil, onEdit)}
+          {!cancelled &&
+            item(
+              'إلغاء',
+              Ban,
+              () => {
+                const why = cancelBlockedMessage(asset, contracts.data ?? [])
+                if (why) setBlocked(why)
+                else (setError(''), setAction('cancel'))
+              },
+              true,
+            )}
+          {item('أرشفة', Archive, () => (setError(''), setAction('archive')))}
+        </div>
+      </Sheet>
+      <Sheet open={!!blocked} onClose={() => setBlocked('')}>
+        <p className="text-[18px] font-extrabold text-title">{t('إلغاء')}</p>
+        <p className="mt-3 whitespace-pre-line text-[13px] font-bold text-sub" dir="auto">
+          {blocked}
+        </p>
+        <button type="button" onClick={() => setBlocked('')} className="mt-5 h-12 w-full rounded-field bg-brand text-[14px] font-extrabold text-white">
+          {t('حسنًا')}
+        </button>
+      </Sheet>
+      <Confirm
+        open={!!action}
+        title={action === 'cancel' ? 'إلغاء' : 'أرشفة'}
+        message={
+          action === 'cancel'
+            ? `«${asset.title}» — ${t('إذا ألغيته فلن تستطيع استعادته: يصبح «ملغي» وتنتقل كل أموره (العقود والدفعات والمستندات) إلى «السجل التاريخي». هل تريد الإلغاء؟')}`
+            : t('سيُنقل العنصر إلى الأرشيف ويمكن إخراجه لاحقًا. هل تريد الأرشفة؟')
+        }
+        confirmLabel={action === 'cancel' ? 'إلغاء العنصر' : 'تأكيد'}
+        danger={action === 'cancel'}
+        busy={busy}
+        error={error}
+        onConfirm={async () => {
+          if (!action) return
+          setBusy(true)
+          setError('')
+          try {
+            if (action === 'cancel') await cancelAsset(asset, contracts.data ?? [])
+            else await archiveAsset(asset)
+            await qc.invalidateQueries({ queryKey: ['assets'] })
+            const done = action
+            setAction(null)
+            onDone(done === 'cancel' ? 'تم إلغاء العنصر — يبقى في «السجل التاريخي»' : 'تمت أرشفة الأصل', true)
+          } catch (e) {
+            setError(e instanceof AssetError ? e.message : errorText(e) || 'تعذّر الحفظ. حاول مرة أخرى.')
+          } finally {
+            setBusy(false)
+          }
+        }}
+        onCancel={() => setAction(null)}
+      />
+    </>
   )
 }
 
@@ -145,42 +314,124 @@ const KINDS: [string, string][] = [
   ['document', 'المستندات'],
 ]
 
-const FILE_FIELD = 'الملف المرفق'
 
-/** سجلات الأصل مقسّمة بالنوع، للعرض فقط. */
-function AssetRecords({ asset }: { asset: Asset }) {
+/** سجلات الأصل مقسّمة بالنوع، مع الإضافة والتعديل والحذف كما في التطبيق. */
+function AssetRecords({ asset, onChanged }: { asset: Asset; onChanged: (m: string) => void }) {
   const { t } = useI18n()
+  const qc = useQueryClient()
   const entries = useAssetEntries()
   const mine = (entries.data ?? []).filter((e) => e.asset_id === asset.id)
   const kinds = KINDS.filter(([k]) => mine.some((e) => e.kind === k))
   const [kind, setKind] = useState<string | null>(null)
+  const [menu, setMenu] = useState(false)
+  const [form, setForm] = useState<{ group: AssetGroup; entry?: AssetEntry } | null>(null)
+  const [removing, setRemoving] = useState<AssetEntry | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
   const active = kind ?? kinds[0]?.[0] ?? null
+  const writable = !['مؤرشف', 'محذوف'].includes(asset.status)
   if (entries.isLoading) return <Loading />
-  if (!kinds.length) return null
   return (
     <div className="mt-5">
-      <p className="mb-2 flex items-center gap-2 text-[14px] font-extrabold text-title">
-        <span className="h-4 w-1 rounded-full bg-gold" />
-        {t('السجلات')}
-      </p>
-      <div className="no-scrollbar -mx-1 flex gap-2 overflow-x-auto px-1 pb-2">
-        {kinds.map(([k, label]) => (
-          <Chip key={k} active={active === k} label={label} count={mine.filter((e) => e.kind === k).length} onClick={() => setKind(k)} />
-        ))}
+      <div className="mb-2 flex items-center justify-between">
+        <p className="flex items-center gap-2 text-[14px] font-extrabold text-title">
+          <span className="h-4 w-1 rounded-full bg-gold" />
+          {t('السجلات')}
+        </p>
+        {writable && (
+          <button type="button" onClick={() => setMenu(true)} className="flex h-9 items-center gap-1 rounded-inner bg-brand px-3 text-[12.5px] font-extrabold text-white hover:bg-brand-dark">
+            <Plus className="size-4" />
+            {t('إضافة')}
+          </button>
+        )}
       </div>
-      <div className="flex flex-col gap-2 rounded-inner bg-surface p-2">
-        {mine
-          .filter((e) => e.kind === active)
-          .slice(0, 60)
-          .map((e) => (
-            <AssetRecord key={e.id} entry={e} />
+      {kinds.length > 0 && (
+        <>
+          <div className="no-scrollbar -mx-1 flex gap-2 overflow-x-auto px-1 pb-2">
+            {kinds.map(([k, label]) => (
+              <Chip key={k} active={active === k} label={label} count={mine.filter((e) => e.kind === k).length} onClick={() => setKind(k)} />
+            ))}
+          </div>
+          <div className="flex flex-col gap-2 rounded-inner bg-surface p-2">
+            {mine
+              .filter((e) => e.kind === active)
+              .slice(0, 60)
+              .map((e) => (
+                <AssetRecord
+                  key={e.id}
+                  entry={e}
+                  onEdit={writable && groupOf(e) ? () => setForm({ group: groupOf(e)!, entry: e }) : undefined}
+                  onDelete={writable && canDeleteEntry(e) ? () => (setError(''), setRemoving(e)) : undefined}
+                />
+              ))}
+          </div>
+        </>
+      )}
+      <Sheet open={menu} onClose={() => setMenu(false)}>
+        <p className="text-[18px] font-extrabold text-title">{t('إضافة')}</p>
+        <p className="mt-0.5 text-[12px] text-muted" dir="auto">
+          {asset.title}
+        </p>
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          {ASSET_GROUPS_W.map((g) => (
+            <button
+              key={g.key}
+              type="button"
+              onClick={() => {
+                setMenu(false)
+                setForm({ group: g })
+              }}
+              className="flex h-12 items-center justify-center gap-1.5 rounded-inner border border-line bg-white text-[13px] font-bold text-ink hover:border-brand hover:text-brand"
+            >
+              <Plus className="size-4" />
+              {t(g.addTitle ?? g.title)}
+            </button>
           ))}
-      </div>
+        </div>
+      </Sheet>
+      {form && (
+        <AssetEntryForm
+          assetId={asset.id}
+          assetTitle={asset.title}
+          group={form.group}
+          entry={form.entry}
+          onClose={() => setForm(null)}
+          onDone={(m) => {
+            setForm(null)
+            onChanged(m)
+          }}
+        />
+      )}
+      <Confirm
+        open={!!removing}
+        title="حذف"
+        message={`«${String(removing?.data?.[groupOf(removing!)?.fields[0].label ?? ''] ?? '')}» — ${t('هل تريد الحذف؟')}`}
+        confirmLabel="حذف"
+        danger
+        busy={busy}
+        error={error}
+        onConfirm={async () => {
+          if (!removing) return
+          setBusy(true)
+          setError('')
+          try {
+            await deleteEntry(removing)
+            await qc.invalidateQueries({ queryKey: ['asset-entries'] })
+            setRemoving(null)
+            onChanged('تم الحذف')
+          } catch (e) {
+            setError(e instanceof AssetError ? e.message : errorText(e) || 'تعذّر الحفظ. حاول مرة أخرى.')
+          } finally {
+            setBusy(false)
+          }
+        }}
+        onCancel={() => setRemoving(null)}
+      />
     </div>
   )
 }
 
-function AssetRecord({ entry }: { entry: AssetEntry }) {
+function AssetRecord({ entry, onEdit, onDelete }: { entry: AssetEntry; onEdit?: () => void; onDelete?: () => void }) {
   const { t } = useI18n()
   const data = entry.data ?? {}
   const pairs = Object.entries(data).filter(
@@ -199,6 +450,22 @@ function AssetRecord({ entry }: { entry: AssetEntry }) {
       ))}
       {!pairs.length && <p className="text-[12px] text-muted">{date(entry.created_at)}</p>}
       {file && <FileButton className="mt-1" file={{ localPath: file }} />}
+      {(onEdit || onDelete) && (
+        <div className="mt-2 flex gap-2">
+          {onEdit && (
+            <button type="button" onClick={onEdit} className="flex h-8 items-center gap-1 rounded-inner bg-brand-soft px-3 text-[12px] font-extrabold text-brand">
+              <Pencil className="size-3.5" />
+              {t('تعديل')}
+            </button>
+          )}
+          {onDelete && (
+            <button type="button" onClick={onDelete} className="flex h-8 items-center gap-1 rounded-inner bg-danger-soft px-3 text-[12px] font-extrabold text-danger">
+              <Trash2 className="size-3.5" />
+              {t('حذف')}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -249,6 +516,8 @@ const CONTRACT_STATUS: Record<string, string> = {
 /** عقود وحدات الأصل ودفعاتها (property_unit_contracts / property_unit_payments). */
 function AssetContracts({ asset }: { asset: Asset }) {
   const { t } = useI18n()
+  const [paying, setPaying] = useState<UnitPayment | null>(null)
+  const [done, setDone] = useState('')
   const currency = useCurrency()
   const contracts = useUnitContracts()
   const payments = useUnitPayments()
@@ -261,6 +530,12 @@ function AssetContracts({ asset }: { asset: Asset }) {
         {t('عقود الإيجار')}
         <span className="rounded-full bg-surface px-2 text-[11px] text-sub">{mine.length}</span>
       </p>
+      {done && (
+        <p className="mb-2 flex items-center gap-2 rounded-inner bg-brand-soft px-3 py-2 text-[12.5px] font-bold text-brand">
+          <CheckCircle2 className="size-4" />
+          {t(done)}
+        </p>
+      )}
       <div className="flex flex-col gap-2 rounded-inner bg-surface p-2">
         {mine.map((c) => {
           const pays = (payments.data ?? []).filter((p) => p.contract_id === c.id)
@@ -290,12 +565,17 @@ function AssetContracts({ asset }: { asset: Asset }) {
                   {pays.map((p) => {
                     const left = Number(p.amount_due || 0) - Number(p.amount_paid || 0)
                     return (
-                      <div key={p.id} className="flex flex-wrap justify-between gap-2 text-[12px]">
+                      <div key={p.id} className="flex flex-wrap items-center justify-between gap-2 text-[12px]">
                         <span className="text-muted">{date(p.due_date)}</span>
                         <span className="font-bold text-ink">{money(p.amount_due, t(currency))}</span>
                         <span className={left > 0.009 ? 'font-bold text-gold-dark' : 'font-bold text-brand'}>
                           {left > 0.009 ? `${t('المتبقي')}: ${money(left)}` : t('مسددة')}
                         </span>
+                        {left > 0.009 && asset.status !== ARCHIVED && (
+                          <button type="button" onClick={() => setPaying(p)} className="h-7 rounded-inner bg-brand px-2.5 text-[11.5px] font-extrabold text-white hover:bg-brand-dark">
+                            {t('تسجيل السداد')}
+                          </button>
+                        )}
                       </div>
                     )
                   })}
@@ -305,6 +585,70 @@ function AssetContracts({ asset }: { asset: Asset }) {
           )
         })}
       </div>
+      {paying && <SettleRent payment={paying} currency={currency} onClose={() => setPaying(null)} onDone={(m) => (setPaying(null), setDone(m), window.setTimeout(() => setDone(''), 4000))} />}
     </div>
+  )
+}
+
+/** «نوع السداد»: كامل بالمتبقي أو جزئي بمبلغ مستلم (الشيك كامل فقط). */
+function SettleRent({ payment, currency, onClose, onDone }: { payment: UnitPayment; currency: string; onClose: () => void; onDone: (m: string) => void }) {
+  const { t } = useI18n()
+  const qc = useQueryClient()
+  const remaining = Number(payment.amount_due) - Number(payment.amount_paid)
+  const cheque = isCheque(payment)
+  const [mode, setMode] = useState<'full' | 'partial' | null>(cheque ? 'full' : null)
+  const [amount, setAmount] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  async function save() {
+    setBusy(true)
+    setError('')
+    try {
+      const settled = await settlePayment(payment, mode === 'partial' ? amount : null)
+      await qc.invalidateQueries({ queryKey: ['unit-payments'] })
+      onDone(settled ? 'تم تسجيل السداد الكامل' : 'تم تسجيل سداد جزئي')
+    } catch (e) {
+      setError(e instanceof AssetError ? e.message : errorText(e) || 'تعذر تسجيل السداد')
+    } finally {
+      setBusy(false)
+    }
+  }
+  const option = (on: boolean) => `rounded-inner border px-3 py-2.5 text-start ${on ? 'border-brand bg-brand-soft' : 'border-line bg-white'}`
+  return (
+    <Sheet open onClose={onClose}>
+      <p className="text-[18px] font-extrabold text-title">{t('نوع السداد')}</p>
+      <p className="mt-0.5 text-[12px] text-muted">
+        {date(payment.due_date)} · {t('المتبقي')}: {money(remaining, t(currency))}
+      </p>
+      <div className="mt-4 flex flex-col gap-2">
+        <button type="button" onClick={() => setMode('full')} className={option(mode === 'full')}>
+          <p className="text-[13.5px] font-extrabold text-title">{t('سداد كامل')}</p>
+          <p className="text-[11.5px] text-sub">
+            {t('المتبقي')}: {money(remaining, t(currency))}
+          </p>
+        </button>
+        {!cheque && (
+          <button type="button" onClick={() => setMode('partial')} className={option(mode === 'partial')}>
+            <p className="text-[13.5px] font-extrabold text-title">{t('سداد جزئي')}</p>
+            <p className="text-[11.5px] text-sub">{t('تبقى الدفعة مفتوحة بالمبلغ المتبقي')}</p>
+          </button>
+        )}
+        {mode === 'partial' && (
+          <label className="flex flex-col gap-1">
+            <span className="text-[12px] font-bold text-sub">{t('المبلغ المستلم')}</span>
+            <input dir="ltr" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} className="h-12 w-full rounded-field border border-line bg-field px-3 text-[13.5px] font-bold text-title outline-none focus:border-gold" />
+          </label>
+        )}
+      </div>
+      {error && <p className="mt-3 rounded-inner bg-danger-soft px-3 py-2 text-[12px] font-bold text-danger">{t(error)}</p>}
+      <button
+        type="button"
+        disabled={!mode || busy || (mode === 'partial' && !(parseFloat(amount) > 0))}
+        onClick={save}
+        className="mt-5 flex w-full items-center justify-center rounded-field bg-brand py-3.5 text-[15px] font-extrabold text-white hover:bg-brand-dark disabled:opacity-50"
+      >
+        {t('تسجيل السداد')}
+      </button>
+    </Sheet>
   )
 }

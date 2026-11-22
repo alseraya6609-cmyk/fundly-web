@@ -41,6 +41,11 @@ export type Asset = {
   end_date: string | null
   needs_attention: boolean
   logs_json?: string | null
+  serial_number?: string | null
+  annexes?: Record<string, unknown> | null
+  is_frozen?: boolean
+  is_pinned?: boolean
+  is_sublease?: boolean
   created_at: string
   updated_at: string
 }

@@ -164,6 +164,13 @@ const rows: Row[] = [
   ['مستحق لك', 'Owed to you', 'On vous doit', 'آپ کا واجب الادا', '应付给您'],
   ['من إدارة فوندلي', 'From Fundly management', 'De la part de l’équipe Fundly', 'فنڈلی انتظامیہ کی جانب سے', '来自 Fundly 管理团队'],
   ['نعمل على تحسين الخدمة، وسنعود قريبًا.', 'We are improving the service and will be back soon.', 'Nous améliorons le service et serons bientôt de retour.', 'ہم سروس بہتر بنا رہے ہیں اور جلد واپس آئیں گے۔', '我们正在改进服务，很快回来。'],
+  ['اختر التصنيف', 'Choose a category', 'Choisissez une catégorie', 'زمرہ منتخب کریں', '选择分类'],
+  ['أكمل:', 'Complete:', 'Complétez :', 'مکمل کریں:', '请填写：'],
+  ['عقود تأجير المركبة والتفويض من التطبيق حاليًا.', 'Vehicle rental contracts and delegation are in the app for now.', 'Les contrats de location du véhicule et la délégation se gèrent dans l’application pour le moment.', 'گاڑی کے کرایہ کے معاہدے اور تفویض فی الحال ایپ سے۔', '车辆租赁合同和授权目前请在应用中操作。'],
+  ['تعديل بيانات العقار والنشاط ووحداته وعقوده من التطبيق حاليًا.', 'Editing property and business details, units and contracts is in the app for now.', 'La modification des biens, activités, unités et contrats se fait dans l’application pour le moment.', 'جائیداد اور کاروبار کی تفصیلات، یونٹس اور معاہدوں میں ترمیم فی الحال ایپ سے۔', '房产和业务资料、单元及合同的编辑目前请在应用中操作。'],
+  ['إذا ألغيته فلن تستطيع استعادته: يصبح «ملغي» وتنتقل كل أموره (العقود والدفعات والمستندات) إلى «السجل التاريخي». هل تريد الإلغاء؟', 'If you cancel it you cannot restore it: it becomes “Cancelled” and everything about it (contracts, payments and documents) moves to “History”. Cancel it?', 'Si vous l’annulez, vous ne pourrez pas le restaurer : il devient « Annulé » et tout ce qui le concerne (contrats, paiements et documents) passe dans « Historique ». L’annuler ?', 'اگر آپ اسے منسوخ کریں گے تو بحال نہیں کر سکیں گے: یہ «منسوخ» ہو جائے گا اور اس کے تمام معاملات (معاہدے، ادائیگیاں اور دستاویزات) «تاریخی ریکارڈ» میں منتقل ہو جائیں گے۔ منسوخ کریں؟', '取消后将无法恢复：它会变为“已取消”，其所有内容（合同、付款和文件）都会移到“历史记录”。确定取消吗？'],
+  ['تم إلغاء العنصر — يبقى في «السجل التاريخي»', 'Item cancelled — it stays in “History”', 'Élément annulé — il reste dans « Historique »', 'آئٹم منسوخ ہو گیا — یہ «تاریخی ریکارڈ» میں رہے گا', '已取消 — 保留在“历史记录”中'],
+  ['تبقى الدفعة مفتوحة بالمبلغ المتبقي', 'The payment stays open for the remaining amount', 'Le paiement reste ouvert pour le montant restant', 'ادائیگی باقی رقم کے لیے کھلی رہے گی', '该笔款项将按剩余金额保持未结'],
 ]
 
 const langs = ['en', 'fr', 'ur', 'zh'] as const
