@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { Building, LayoutGrid, UserRound, Users } from 'lucide-react'
+import { Archive, Building, CheckCircle2, LayoutGrid, Pencil, Plus, Trash2, UserRound, Users } from 'lucide-react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useI18n } from '@/lib/i18n'
 import { moduleHidden, useSession } from '@/lib/session'
 import { useCurrency, usePeople, usePersonal, type Person } from '@/lib/data'
@@ -8,6 +9,10 @@ import { MODULE_COLORS } from '@/lib/catalog'
 import { date, matches, money } from '@/lib/format'
 import { Chevron, Chip, Empty, ErrorBox, IconBadge, InfoRow, Loading, PageHeader, SearchField, SectionTitle, Sheet } from '@/components/ui'
 import { EntryCard } from '@/components/EntryCard'
+import { PersonEditor } from '@/components/PersonEditor'
+import { Confirm } from '@/components/Confirm'
+import { PeopleError, deletePerson, isFrozen, setPersonArchived } from '@/lib/peopleWrite'
+import { errorText } from '@/lib/supabase'
 
 // people_directory_store.dart: الجهة نوعها يبدأ بـ entity_.
 const isEntity = (p: Person) => String(p.typeKey ?? '').startsWith('entity_')
@@ -25,6 +30,17 @@ export default function People() {
   const [params, setParams] = useSearchParams()
   const [filter, setFilter] = useState<'all' | 'people' | 'entities'>('all')
   const [search, setSearch] = useState('')
+  const qc = useQueryClient()
+  const [adding, setAdding] = useState(false)
+  const [editing, setEditing] = useState<Person | null>(null)
+  const [action, setAction] = useState<'archive' | 'delete' | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [actionError, setActionError] = useState('')
+  const [notice, setNotice] = useState('')
+  const flash = (message: string) => {
+    setNotice(message)
+    window.setTimeout(() => setNotice(''), 4000)
+  }
 
   const all = people.data ?? []
   const list = useMemo(
@@ -41,6 +57,24 @@ export default function People() {
   )
   const openIndex = params.get('open')
   const open = openIndex !== null ? all[Number(openIndex)] : undefined
+
+  async function runAction() {
+    if (!open || !action) return
+    setBusy(true)
+    setActionError('')
+    try {
+      if (action === 'archive') await setPersonArchived(open, true)
+      else await deletePerson(open)
+      await qc.invalidateQueries({ queryKey: ['store'] })
+      setAction(null)
+      setParams({})
+      flash(action === 'archive' ? 'تمت أرشفة الشخص' : 'تم حذف السجل')
+    } catch (e) {
+      setActionError(e instanceof PeopleError ? e.message : errorText(e) || 'تعذّر حفظ التعديل. حاول مرة أخرى.')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   if (moduleHidden(hidden, 'people')) {
     return (
@@ -76,7 +110,25 @@ export default function People() {
         </Link>
       )}
 
-      <SearchField value={search} onChange={setSearch} placeholder="بحث" />
+      {notice && (
+        <p className="mb-3 flex items-center gap-2 rounded-inner bg-brand-soft px-4 py-3 text-[13px] font-bold text-brand">
+          <CheckCircle2 className="size-4" />
+          {t(notice)}
+        </p>
+      )}
+      <div className="flex gap-2">
+        <div className="min-w-0 flex-1">
+          <SearchField value={search} onChange={setSearch} placeholder="بحث" />
+        </div>
+        <button
+          type="button"
+          onClick={() => setAdding(true)}
+          className="flex h-14 shrink-0 items-center gap-2 rounded-field bg-brand px-4 text-[14px] font-extrabold text-white hover:bg-brand-dark"
+        >
+          <Plus className="size-5" />
+          <span className="hidden sm:inline">{t('إضافة')}</span>
+        </button>
+      </div>
 
       <SectionTitle>{t('الفئات')}</SectionTitle>
       <div className="flex flex-wrap gap-2">
@@ -118,6 +170,38 @@ export default function People() {
               {open.categoryName ? ` · ${t(open.categoryName)}` : ''}
             </p>
             <h2 className="mt-1 text-[20px] font-extrabold text-title">{open.fullName}</h2>
+            <div className="mt-4 grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => (isFrozen(open) ? flash('لا يمكن التعديل لأن السجل مجمّد. ألغِ التجميد أولاً.') : setEditing(open))}
+                className="flex h-11 items-center justify-center gap-1.5 rounded-inner bg-brand text-[13px] font-extrabold text-white hover:bg-brand-dark"
+              >
+                <Pencil className="size-4" />
+                {t('تعديل')}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setActionError('')
+                  setAction('archive')
+                }}
+                className="flex h-11 items-center justify-center gap-1.5 rounded-inner bg-surface text-[13px] font-extrabold text-body hover:bg-line"
+              >
+                <Archive className="size-4" />
+                {t('أرشفة')}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setActionError('')
+                  setAction('delete')
+                }}
+                className="flex h-11 items-center justify-center gap-1.5 rounded-inner bg-danger-soft text-[13px] font-extrabold text-danger hover:bg-danger/15"
+              >
+                <Trash2 className="size-4" />
+                {t('حذف')}
+              </button>
+            </div>
             <div className="mt-4">
               <InfoRow label="اللقب" value={open.nickName} />
               <InfoRow label="الصفة" value={open.roleTitle ? t(open.roleTitle) : ''} />
@@ -135,11 +219,40 @@ export default function People() {
               <InfoRow label="آخر تحديث" value={date(open.lastUpdate)} />
             </div>
             <p className="mt-5 rounded-inner bg-surface px-4 py-3 text-[12px] text-sub">
-              {t('التعديل والإضافة من التطبيق حاليًا. الموقع للعرض في هذه المرحلة.')}
+              {t('الوثائق والمستحقات والتفويض من التطبيق.')}
             </p>
+            <Confirm
+              open={!!action}
+              title={action === 'archive' ? 'أرشفة' : 'حذف الشخص'}
+              message={
+                action === 'archive'
+                  ? `«${open.fullName}» — ${t('سيُنقل إلى الأرشيف ويمكنك إخراجه لاحقًا. هل تريد الأرشفة؟')}`
+                  : `${t('هل تريد حذف')} «${open.fullName}»؟ ${t('الحذف نهائي ولا يمكن التراجع عنه.')}`
+              }
+              confirmLabel={action === 'archive' ? 'أرشفة' : 'حذف'}
+              danger={action === 'delete'}
+              busy={busy}
+              error={actionError}
+              onConfirm={runAction}
+              onCancel={() => setAction(null)}
+            />
           </div>
         )}
       </Sheet>
+      <PersonEditor
+        open={adding || !!editing}
+        person={editing ?? undefined}
+        onClose={() => {
+          setAdding(false)
+          setEditing(null)
+        }}
+        onSaved={(message) => {
+          setAdding(false)
+          setEditing(null)
+          setParams({})
+          flash(message)
+        }}
+      />
     </div>
   )
 }

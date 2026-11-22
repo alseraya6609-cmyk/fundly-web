@@ -3,8 +3,9 @@ import { Archive as ArchiveIcon, ArchiveRestore, Building2, CheckCircle2, FileDo
 import { useQueryClient } from '@tanstack/react-query'
 import { useI18n } from '@/lib/i18n'
 import { useSession } from '@/lib/session'
-import { ARCHIVED, assetUnits, hasMine, personArchived, useAssets, usePeopleAll, usePersonalAll, useSharedAll, useStore, type Entry } from '@/lib/data'
+import { ARCHIVED, assetUnits, hasMine, personArchived, useAssets, usePeopleAll, usePersonalAll, useSharedAll, useStore, type Entry, type Person } from '@/lib/data'
 import { canEdit, unarchiveEntry } from '@/lib/personalWrite'
+import { PeopleError, setPersonArchived } from '@/lib/peopleWrite'
 import { errorText } from '@/lib/supabase'
 import { Confirm } from '@/components/Confirm'
 import { date, matches } from '@/lib/format'
@@ -18,7 +19,7 @@ import { useReportSettings, type ReportDocument, type SummaryItem } from '@/lib/
   ووحدات العقارات المؤرشفة. للعرض فقط؛ إلغاء الأرشفة من التطبيق.
 */
 
-type Row = { key: string; source: string; title: string; subtitle: string; entry?: Entry }
+type Row = { key: string; source: string; title: string; subtitle: string; entry?: Entry; person?: Person }
 
 const SOURCES: { key: string; icon: LucideIcon; color: string }[] = [
   { key: 'الالتزامات الشخصية', icon: UserRound, color: '#0A5A50' },
@@ -32,6 +33,7 @@ export default function Archive() {
   const { profile, user } = useSession()
   const qc = useQueryClient()
   const [restoring, setRestoring] = useState<Entry | null>(null)
+  const [restoringPerson, setRestoringPerson] = useState<Person | null>(null)
   const [busy, setBusy] = useState(false)
   const [restoreError, setRestoreError] = useState('')
   const [notice, setNotice] = useState('')
@@ -65,7 +67,7 @@ export default function Archive() {
     }
     ;(people.data ?? []).forEach((p, i) => {
       if (!personArchived(p)) return
-      out.push({ key: `h${i}`, source: 'الأفراد والجهات', title: p.fullName, subtitle: join(t(p.roleTitle ?? ''), t(p.categoryName ?? '')) })
+      out.push({ key: `h${i}`, source: 'الأفراد والجهات', title: p.fullName, subtitle: join(t(p.roleTitle ?? ''), t(p.categoryName ?? '')), person: p })
     })
     for (const a of assets.data ?? []) {
       if (a.status === ARCHIVED) {
@@ -174,6 +176,19 @@ export default function Archive() {
                       </p>
                     )}
                   </div>
+                  {r.person && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRestoreError('')
+                        setRestoringPerson(r.person!)
+                      }}
+                      className="flex h-10 shrink-0 items-center gap-1.5 rounded-inner border border-line bg-white px-3 text-[12px] font-extrabold text-brand hover:bg-brand-soft"
+                    >
+                      <ArchiveRestore className="size-4" />
+                      <span className="hidden sm:inline">{t('إخراج من الأرشيف')}</span>
+                    </button>
+                  )}
                   {r.entry && canEdit(r.entry, user?.id) && (
                     <button
                       type="button"
@@ -191,7 +206,7 @@ export default function Archive() {
               )
             })}
           </div>
-          <p className="mt-5 rounded-inner bg-surface px-4 py-3 text-[12px] text-sub">{t('الالتزامات الشخصية تُخرج من الأرشيف هنا، وبقية الأقسام من التطبيق.')}</p>
+          <p className="mt-5 rounded-inner bg-surface px-4 py-3 text-[12px] text-sub">{t('الالتزامات الشخصية والأفراد والجهات تُخرج من الأرشيف هنا، وبقية الأقسام من التطبيق.')}</p>
         </>
       )}
       <ReportPreview doc={preview} onClose={() => setPreview(null)} />
@@ -219,6 +234,31 @@ export default function Archive() {
           }
         }}
         onCancel={() => setRestoring(null)}
+      />
+      <Confirm
+        open={!!restoringPerson}
+        title="إخراج من الأرشيف"
+        message={`«${restoringPerson?.fullName ?? ''}» — ${t('سيعود إلى الأفراد والجهات. هل تريد المتابعة؟')}`}
+        confirmLabel="إخراج من الأرشيف"
+        busy={busy}
+        error={restoreError}
+        onConfirm={async () => {
+          if (!restoringPerson) return
+          setBusy(true)
+          setRestoreError('')
+          try {
+            await setPersonArchived(restoringPerson, false)
+            await qc.invalidateQueries({ queryKey: ['store'] })
+            setRestoringPerson(null)
+            setNotice('تم إخراج الشخص من الأرشيف')
+            window.setTimeout(() => setNotice(''), 4000)
+          } catch (e) {
+            setRestoreError(e instanceof PeopleError ? e.message : errorText(e) || 'تعذّر حفظ التعديل. حاول مرة أخرى.')
+          } finally {
+            setBusy(false)
+          }
+        }}
+        onCancel={() => setRestoringPerson(null)}
       />
     </div>
   )
