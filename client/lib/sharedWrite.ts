@@ -235,3 +235,99 @@ export async function addSharedExpense(entry: Entry, input: ExpenseInput, me: st
 }
 
 export { parseMoney }
+
+// ---------------- موافقة المسؤول والميزانية الإضافية ----------------
+/*
+  _decideExpense و _decideContribution: المسؤول يوافق على مصروف أو ميزانية
+  إضافية أرسلها عضو أو يرفضها، فتصير «معتمد» أو «مرفوض» مع وقت القرار.
+  _openContributionForm: ميزانية إضافية باسم من دفعها. من الموقع للمسؤول فقط،
+  لأن العضو يلزمه إرفاق صورة الإيصال (من التطبيق).
+*/
+
+const CONTRIBUTIONS_KEY = 'سجل المساهمات'
+
+function stampNow() {
+  const n = new Date()
+  const two = (v: number) => String(v).padStart(2, '0')
+  return `${n.getDate()}/${n.getMonth() + 1}/${n.getFullYear()} ${two(n.getHours())}:${two(n.getMinutes())}`
+}
+
+/** قراءة أحدث نسخة، وتطبيق [change]، والكتابة بشرط عدم تغيّرها، مع تصحيح الحالة. */
+async function mutateShared(entry: Entry, change: (details: Record<string, string>, raw: Record<string, unknown>) => Record<string, string>): Promise<void> {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const { data, error } = await supabase.from('shared_entries').select('id, status, details, updated_at').eq('id', entry.id).maybeSingle()
+    if (error) throw error
+    if (!data) throw new SharedError('لم يعد هذا الالتزام موجودًا')
+    const row = data as Row
+    const details = asStrings(row.details)
+    const changed = change(details, row.details)
+    const nextDetails = { ...details, ...changed }
+    const patch: Record<string, unknown> = { details: { ...row.details, ...changed } }
+    if (row.status === 'نشطة' || row.status === 'مكتملة') {
+      const done = settlements(nextDetails).length > 0 && settleTransfers(nextDetails, memberNames(nextDetails)).length === 0
+      const wanted = done ? 'مكتملة' : 'نشطة'
+      if (wanted !== row.status) patch.status = wanted
+    }
+    const { data: saved, error: saveError } = await supabase.from('shared_entries').update(patch).eq('id', row.id).eq('updated_at', row.updated_at).select('id')
+    if (saveError) throw saveError
+    if (saved && saved.length) return
+  }
+  throw new SharedError('تغيّرت البيانات أثناء الحفظ — أعد المحاولة')
+}
+
+/** الموافقة على مصروف أو ميزانية إضافية بانتظار الموافقة، أو رفضه. */
+export async function decideLedgerItem(entry: Entry, kind: 'expense' | 'contribution', id: string, approve: boolean, me: string, myNames: string[]) {
+  const key = kind === 'expense' ? EXPENSES_KEY : CONTRIBUTIONS_KEY
+  await mutateShared(entry, (details) => {
+    if (!iAmManager(details, me, myNames)) throw new SharedError('الموافقة والرفض للمسؤول وحده')
+    let list: Record<string, unknown>[]
+    try {
+      const parsed = JSON.parse(details[key] || '[]')
+      if (!Array.isArray(parsed)) throw new Error()
+      list = parsed
+    } catch {
+      throw new SharedError('تعذّرت قراءة السجل — نفّذ ذلك من التطبيق')
+    }
+    const index = list.findIndex((x) => x && String(x.id) === id)
+    if (index < 0) throw new SharedError('لم يعد هذا الطلب قائمًا')
+    if (String(list[index].status ?? '') !== 'بانتظار الموافقة') throw new SharedError('سبق البت في هذا الطلب')
+    const old = list[index]
+    const decided: Record<string, unknown> = {}
+    // ترتيب الحقول كما في التطبيق: وقت القرار بعد «submittedBy» للمصروف، وفي الآخر للمساهمة.
+    for (const [k, v] of Object.entries(old)) {
+      if (k === 'decidedAt') continue
+      decided[k] = k === 'status' ? (approve ? 'معتمد' : 'مرفوض') : v
+      if (kind === 'expense' && k === 'submittedBy') decided.decidedAt = stampNow()
+    }
+    if (!('decidedAt' in decided)) decided.decidedAt = stampNow()
+    const next = [...list]
+    next[index] = decided
+    return { [key]: JSON.stringify(next) }
+  })
+}
+
+/** ميزانية إضافية من المسؤول (معتمدة مباشرة). */
+export async function addContribution(entry: Entry, member: string, amount: number, date: string, note: string, me: string, myNames: string[], publicName: string) {
+  await mutateShared(entry, (details) => {
+    if (!iAmManager(details, me, myNames)) throw new SharedError('الميزانية الإضافية من الموقع للمسؤول وحده — العضو يضيفها من التطبيق مع صورة الإيصال')
+    const raw = (details[CONTRIBUTIONS_KEY] ?? '').trim()
+    let list = '[]'
+    if (raw) {
+      try {
+        if (!Array.isArray(JSON.parse(raw))) throw new Error()
+        list = raw
+      } catch {
+        throw new SharedError('تعذّرت قراءة السجل — نفّذ ذلك من التطبيق')
+      }
+    }
+    const item = { id: String(Date.now()), member, amount, date, note: note.trim(), status: 'معتمد', submittedBy: publicName }
+    const body = list.slice(0, list.lastIndexOf(']')).trim()
+    return { [CONTRIBUTIONS_KEY]: `${body}${body === '[' ? '' : ','}${JSON.stringify(item)}]` }
+  })
+}
+
+/** الدفعة المقطوعة (_isLumpSum): فيها ميزانية تُزاد بمساهمات إضافية. */
+export function isLumpSum(details: Record<string, unknown>): boolean {
+  const method = String(details['طريقة تحصيل المبلغ'] ?? '').trim()
+  return method ? method === 'دفعة مقطوعة' : hasBudget(details)
+}

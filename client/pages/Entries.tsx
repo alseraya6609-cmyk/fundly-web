@@ -430,7 +430,7 @@ function EntryDetails({
         <InfoRow label="آخر تحديث" value={date(entry.updated_at)} />
       </div>
 
-      {page === 'shared' && <SharedDetails details={entry.details ?? {}} entryType={entry.entry_type} currency={currency} />}
+      {page === 'shared' && <SharedDetails details={entry.details ?? {}} entryType={entry.entry_type} currency={currency} entry={entry} onChanged={onChanged} />}
 
       {logs.map(([key, rows]) => (
         <DetailBlock key={key} title={key} count={rows.length}>

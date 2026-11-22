@@ -1,4 +1,12 @@
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { Check, PlusCircle, X } from 'lucide-react'
+import { useStore, type Entry } from '@/lib/data'
+import { errorText } from '@/lib/supabase'
+import { publicName as publicNameOf } from '@/lib/requestsWrite'
+import { SharedError, addContribution, decideLedgerItem, isLumpSum } from '@/lib/sharedWrite'
+import { Confirm } from './Confirm'
+import { Sheet } from './ui'
 import { useI18n } from '@/lib/i18n'
 import { useSession } from '@/lib/session'
 import { date, money } from '@/lib/format'
@@ -14,7 +22,9 @@ import {
   expenses,
   fndIn,
   hasBudget,
+  iAmManager,
   memberNets,
+  parseMoney,
   memberNames,
   members,
   remaining,
@@ -65,7 +75,26 @@ function Stat({ label, value, color }: { label: string; value: string; color?: s
  * تفاصيل الالتزام المشترك كما يعرضها التطبيق: الأعضاء ودعواتهم، والميزانية
  * والمصروفات والأرصدة والتسوية، أو دورات الجمعية. للعرض فقط.
  */
-export function SharedDetails({ details, entryType, currency }: { details: Record<string, unknown>; entryType: string; currency: string }) {
+/** صلاحيات الكتابة في الدفتر من الموقع (المسؤول يوافق ويضيف ميزانية). */
+type LedgerActions = {
+  manager: boolean
+  decide: (kind: 'expense' | 'contribution', id: string, label: string) => void
+  addBudget?: () => void
+}
+
+export function SharedDetails({
+  details,
+  entryType,
+  currency,
+  entry,
+  onChanged,
+}: {
+  details: Record<string, unknown>
+  entryType: string
+  currency: string
+  entry?: Entry
+  onChanged?: (message: string) => void
+}) {
   const { t } = useI18n()
   const { profile } = useSession()
   const fnd = profile?.fnd_id ?? ''
@@ -75,6 +104,54 @@ export function SharedDetails({ details, entryType, currency }: { details: Recor
   const replies = acceptances(details)
   const isCircle = entryType === 'جمعية مالية' || entryType === 'جمعية'
   const shown = (name: string) => (name === POT ? t(POT) : withoutFnd(name) || name)
+
+  // الكتابة: الموافقة على الطلبات والميزانية الإضافية (للمسؤول).
+  const store = useStore()
+  const qc = useQueryClient()
+  const fullName = String(store.data?.['settings_profile_name'] ?? '').trim() || profile?.display_name || ''
+  const shownName = publicNameOf(store.data, profile?.display_name ?? '')
+  const myNames = [fullName, shownName].filter(Boolean)
+  const writable = !!entry && !['مؤرشف', 'ملغاة', 'محذوف'].includes(entry.status)
+  const manager = writable && iAmManager(details, fnd, myNames)
+  const [deciding, setDeciding] = useState<{ kind: 'expense' | 'contribution'; id: string; label: string; approve: boolean } | null>(null)
+  const [budgetOpen, setBudgetOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  async function runDecision() {
+    if (!entry || !deciding) return
+    setBusy(true)
+    setError('')
+    try {
+      await decideLedgerItem(entry, deciding.kind, deciding.id, deciding.approve, fnd, myNames)
+      await qc.invalidateQueries({ queryKey: ['shared'] })
+      onChanged?.(
+        deciding.kind === 'expense'
+          ? deciding.approve
+            ? 'تمت الموافقة على المصروف'
+            : 'تم رفض المصروف'
+          : deciding.approve
+            ? 'تمت الموافقة على الميزانية الإضافية'
+            : 'تم رفض الميزانية الإضافية',
+      )
+      setDeciding(null)
+    } catch (e) {
+      setError(e instanceof SharedError ? e.message : errorText(e) || 'تعذّر الحفظ. حاول مرة أخرى.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const actions: LedgerActions | undefined = manager
+    ? {
+        manager,
+        decide: (kind, id, label) => {
+          setError('')
+          setDeciding({ kind, id, label, approve: true })
+        },
+        addBudget: isLumpSum(details) ? () => setBudgetOpen(true) : undefined,
+      }
+    : undefined
 
   return (
     <div>
@@ -99,8 +176,186 @@ export function SharedDetails({ details, entryType, currency }: { details: Recor
           })}
         </Block>
       )}
-      {isCircle ? <CircleView details={details} names={names} cur={cur} shown={shown} /> : <LedgerView details={details} names={names} cur={cur} shown={shown} />}
+      {isCircle ? (
+        <CircleView details={details} names={names} cur={cur} shown={shown} />
+      ) : (
+        <LedgerView
+          details={details}
+          names={names}
+          cur={cur}
+          shown={shown}
+          actions={actions}
+          onDecide={(kind, id, label, approve) => {
+            setError('')
+            setDeciding({ kind, id, label, approve })
+          }}
+        />
+      )}
+      <Confirm
+        open={!!deciding}
+        title={deciding?.approve ? 'موافقة' : 'رفض'}
+        message={`«${deciding?.label ?? ''}» — ${t(
+          deciding?.kind === 'expense'
+            ? deciding?.approve
+              ? 'هل تريد الموافقة على المصروف؟'
+              : 'هل تريد رفض المصروف؟'
+            : deciding?.approve
+              ? 'هل تريد الموافقة على الميزانية الإضافية؟'
+              : 'هل تريد رفض الميزانية الإضافية؟',
+        )}`}
+        confirmLabel={deciding?.approve ? 'موافقة' : 'رفض'}
+        danger={deciding?.approve === false}
+        busy={busy}
+        error={error}
+        onConfirm={runDecision}
+        onCancel={() => setDeciding(null)}
+      />
+      {entry && budgetOpen && (
+        <BudgetForm
+          entry={entry}
+          members={names}
+          cur={cur}
+          shown={shown}
+          fnd={fnd}
+          myNames={myNames}
+          publicName={shownName}
+          onClose={() => setBudgetOpen(false)}
+          onDone={(message) => {
+            setBudgetOpen(false)
+            onChanged?.(message)
+          }}
+        />
+      )}
     </div>
+  )
+}
+
+/** «ميزانية إضافية» (_openContributionForm) — من الموقع للمسؤول. */
+function BudgetForm({
+  entry,
+  members,
+  cur,
+  shown,
+  fnd,
+  myNames,
+  publicName,
+  onClose,
+  onDone,
+}: {
+  entry: Entry
+  members: string[]
+  cur: string
+  shown: (n: string) => string
+  fnd: string
+  myNames: string[]
+  publicName: string
+  onClose: () => void
+  onDone: (message: string) => void
+}) {
+  const { t } = useI18n()
+  const qc = useQueryClient()
+  const now = new Date()
+  const [member, setMember] = useState(members[0] ?? '')
+  const [amountText, setAmountText] = useState('')
+  const [dateValue, setDateValue] = useState(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`)
+  const [note, setNote] = useState('')
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const amount = parseMoney(amountText)
+  const [y, m, d] = dateValue.split('-').map((x) => parseInt(x, 10))
+  const dmy = dateValue ? `${d}/${m}/${y}` : ''
+  const fieldClass = 'h-12 w-full rounded-field border border-line bg-field px-3 text-[13.5px] font-bold text-title outline-none focus:border-gold'
+
+  async function save() {
+    setBusy(true)
+    setError('')
+    try {
+      await addContribution(entry, member, amount, dmy, note, fnd, myNames, publicName)
+      await qc.invalidateQueries({ queryKey: ['shared'] })
+      setConfirming(false)
+      onDone(`${shown(member)} ${t('أضاف')} ${money(amount, cur)} ${t('كميزانية إضافية')}`)
+    } catch (e) {
+      setError(e instanceof SharedError ? e.message : errorText(e) || 'تعذّر الحفظ. حاول مرة أخرى.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Sheet open onClose={onClose}>
+      <p className="text-[18px] font-extrabold text-title">{t('ميزانية إضافية')}</p>
+      <p className="mt-0.5 text-[12px] text-muted">{t('دفعة فوق المساهمة الأساسية حين لا تكفي الميزانية')}</p>
+      <p className="mb-1.5 mt-4 text-[12px] font-extrabold text-title">{t('من دفع المساهمة؟ *')}</p>
+      <div className="flex flex-wrap gap-2">
+        {members.map((n) => (
+          <button
+            key={n}
+            type="button"
+            onClick={() => setMember(n)}
+            className={`h-9 rounded-full px-3 text-[12px] font-bold ${member === n ? 'bg-brand-soft text-brand' : 'bg-field text-sub'}`}
+          >
+            {shown(n)}
+          </button>
+        ))}
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-3">
+        <label className="flex flex-col gap-1">
+          <span className="text-[12px] font-bold text-sub">
+            {t('المبلغ')} * ({t(cur)})
+          </span>
+          <input dir="ltr" inputMode="decimal" value={amountText} onChange={(e) => setAmountText(e.target.value)} className={fieldClass} />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-[12px] font-bold text-sub">{t('التاريخ')}</span>
+          <input type="date" value={dateValue} onChange={(e) => setDateValue(e.target.value)} className={fieldClass} />
+        </label>
+        <label className="col-span-2 flex flex-col gap-1">
+          <span className="text-[12px] font-bold text-sub">{t('ملاحظة')}</span>
+          <textarea rows={2} dir="auto" value={note} onChange={(e) => setNote(e.target.value)} className={`${fieldClass} h-auto py-3`} />
+        </label>
+      </div>
+      {error && !confirming && <p className="mt-3 rounded-inner bg-danger-soft px-3 py-2 text-[12px] font-bold text-danger">{t(error)}</p>}
+      <button
+        type="button"
+        onClick={() => {
+          if (amount <= 0) {
+            setError('اكتب مبلغ المساهمة')
+            return
+          }
+          setError('')
+          setConfirming(true)
+        }}
+        className="mt-5 flex h-13 w-full items-center justify-center rounded-field bg-brand py-3.5 text-[15px] font-extrabold text-white hover:bg-brand-dark"
+      >
+        {t('حفظ المساهمة')}
+      </button>
+      <Confirm
+        open={confirming}
+        title="تأكيد"
+        message={`${t('هل تريد تسجيل')}: ${shown(member)} ${t('أضاف')} ${money(amount, cur)} ${t('كميزانية إضافية')}؟`}
+        busy={busy}
+        error={error}
+        onConfirm={save}
+        onCancel={() => setConfirming(false)}
+      />
+    </Sheet>
+  )
+}
+
+function DecideButtons({ onApprove, onReject }: { onApprove: () => void; onReject: () => void }) {
+  const { t } = useI18n()
+  return (
+    <span className="mt-1.5 flex gap-2">
+      <button type="button" onClick={onApprove} className="flex h-8 items-center gap-1 rounded-inner bg-brand px-3 text-[12px] font-extrabold text-white hover:bg-brand-dark">
+        <Check className="size-3.5" />
+        {t('موافقة')}
+      </button>
+      <button type="button" onClick={onReject} className="flex h-8 items-center gap-1 rounded-inner bg-danger-soft px-3 text-[12px] font-extrabold text-danger hover:bg-danger/15">
+        <X className="size-3.5" />
+        {t('رفض')}
+      </button>
+    </span>
   )
 }
 
@@ -161,12 +416,27 @@ function CircleView({ details, names, cur, shown }: { details: Record<string, un
   )
 }
 
-function LedgerView({ details, names, cur, shown }: { details: Record<string, unknown>; names: string[]; cur: string; shown: (n: string) => string }) {
+function LedgerView({
+  details,
+  names,
+  cur,
+  shown,
+  actions,
+  onDecide,
+}: {
+  details: Record<string, unknown>
+  names: string[]
+  cur: string
+  shown: (n: string) => string
+  actions?: LedgerActions
+  onDecide: (kind: 'expense' | 'contribution', id: string, label: string, approve: boolean) => void
+}) {
   const { t } = useI18n()
   const all = expenses(details)
   const contribs = contributions(details)
   const settles = settlements(details)
   if (!all.length && !contribs.length && !settles.length && !hasBudget(details)) return null
+  const addBudget = actions?.addBudget
   const spent = total(details)
   const nets = memberNets(details, names)
   const transfers = settleTransfers(details, names)
@@ -181,6 +451,16 @@ function LedgerView({ details, names, cur, shown }: { details: Record<string, un
           <Stat label="المتبقي" value={money(remaining(details), cur)} color={remaining(details) < -0.01 ? '#C4392E' : '#0A5A50'} />
         )}
       </div>
+      {addBudget && (
+        <button
+          type="button"
+          onClick={addBudget}
+          className="mt-2 flex h-10 items-center gap-1.5 rounded-inner border border-line bg-white px-3 text-[12px] font-extrabold text-brand hover:bg-brand-soft"
+        >
+          <PlusCircle className="size-4" />
+          {t('ميزانية إضافية')}
+        </button>
+      )}
 
       {byCategory.length > 0 && (
         <Block title="المصروفات حسب التصنيف">
@@ -236,6 +516,12 @@ function LedgerView({ details, names, cur, shown }: { details: Record<string, un
                 {e.status !== 'معتمد' && <span className={e.status === PENDING ? 'font-bold text-gold-dark' : 'font-bold text-danger'}> · {t(e.status)}</span>}
               </p>
               {e.receipt && <FileButton className="mt-1" file={{ localPath: e.receipt }} label="الفاتورة" />}
+              {actions && e.status === PENDING && (
+                <DecideButtons
+                  onApprove={() => onDecide('expense', e.id, e.description || t('مصروف'), true)}
+                  onReject={() => onDecide('expense', e.id, e.description || t('مصروف'), false)}
+                />
+              )}
             </div>
           ))}
         </Block>
@@ -252,6 +538,14 @@ function LedgerView({ details, names, cur, shown }: { details: Record<string, un
                 {c.status !== 'معتمد' ? ` · ${t(c.status)}` : ''}
               </span>
               {c.receipt && <FileButton file={{ localPath: c.receipt }} label="الإيصال" />}
+              {actions && c.status === PENDING && (
+                <span className="w-full">
+                  <DecideButtons
+                    onApprove={() => onDecide('contribution', c.id, `${shown(c.member)} — ${money(c.amount, cur)}`, true)}
+                    onReject={() => onDecide('contribution', c.id, `${shown(c.member)} — ${money(c.amount, cur)}`, false)}
+                  />
+                </span>
+              )}
             </div>
           ))}
         </Block>
