@@ -71,7 +71,7 @@ export type Metrics = {
 // ---------------- entry_status.dart ----------------
 
 export const CLOSED_STATUSES = new Set(['مكتملة', 'مكتمل', 'مؤرشف', 'ملغاة', 'ملغى', 'محذوف', 'تمت التسوية', 'مسددة'])
-const FINAL_STATUSES = new Set(['مكتملة', 'مؤرشف', 'ملغاة', 'تمت التسوية', 'محذوف', 'مجمّدة'])
+export const FINAL_STATUSES = new Set(['مكتملة', 'مؤرشف', 'ملغاة', 'تمت التسوية', 'محذوف', 'مجمّدة'])
 export const TRANSACTION_TYPES = new Set(['المصروفات الشخصية', 'مصروف', 'إيراد', 'تحويل مالي'])
 const FINANCIAL_TYPES = new Set(['المصروفات الشخصية', 'مصروف', 'إيراد', 'تحويل مالي', 'دين / قرض / سلفة', 'قسط', 'غرامة', 'جمعية'])
 const PAYABLE_TYPES = new Set(['دين / قرض / سلفة', 'قسط'])
@@ -132,7 +132,7 @@ function addMonthsClamped(date: Date, months: number) {
   return new Date(year, month, Math.min(date.getDate(), last))
 }
 
-function entryDerivedStatus(stored: string, details: Record<string, unknown>, today: Date) {
+export function entryDerivedStatus(stored: string, details: Record<string, unknown>, today: Date) {
   if (FINAL_STATUSES.has(stored)) return stored
   const end = parseDay(details['إلى تاريخ']) ?? parseDay(details['تاريخ الانتهاء'])
   if (end && end < today) return 'منتهية'
@@ -147,7 +147,7 @@ function entryIsRepeating(details: Record<string, unknown>) {
   return cycle in REPEAT_MONTHS || cycle in REPEAT_DAYS
 }
 
-function entryNextRepeatDate(first: Date | null, details: Record<string, unknown>, today: Date): Date | null {
+export function entryNextRepeatDate(first: Date | null, details: Record<string, unknown>, today: Date): Date | null {
   if (!first || !entryIsRepeating(details)) return null
   const cycle = str(details['التكرار'])
   const months = REPEAT_MONTHS[cycle] ?? 0
@@ -213,7 +213,7 @@ function entryNextUnpaidInstallment(details: Record<string, unknown>, paid: numb
   return null
 }
 
-function entryFollowDate(type: string, due: Date | null, details: Record<string, unknown>, today: Date): Date | null {
+export function entryFollowDate(type: string, due: Date | null, details: Record<string, unknown>, today: Date): Date | null {
   if (!due) return null
   if (type === 'ملاحظات' || type === 'ملاحظة') return null
   if (type === 'عهدة مالية' || type === 'أدوية') return null
@@ -226,7 +226,7 @@ function entryFollowDate(type: string, due: Date | null, details: Record<string,
   return entryNextRepeatDate(due, details, today) ?? due
 }
 
-function entryOutcomeStatus(type: string, due: Date | null, details: Record<string, unknown>, total: number, today: Date): string | null {
+export function entryOutcomeStatus(type: string, due: Date | null, details: Record<string, unknown>, total: number, today: Date): string | null {
   if (PAYABLE_TYPES.has(type) && total > 0 && entryPaidTotal(details) >= total) return 'مكتملة'
   if (EVENT_TYPES.has(type) && due && !entryIsRepeating(details) && due < today) return 'منتهية'
   return null

@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom'
-import { Archive, Bell, CalendarDays, Ellipsis, FileText, House, LayoutDashboard, type LucideIcon } from 'lucide-react'
+import { Archive, Bell, CalendarDays, Ellipsis, FileBarChart, FileText, House, LayoutDashboard, type LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/format'
 import { useI18n } from '@/lib/i18n'
 import { useSession } from '@/lib/session'
@@ -23,6 +23,7 @@ export function AppShell() {
     { to: '/archive', label: 'الأرشيف', icon: Archive },
     { to: '/documents', label: 'المستندات', icon: FileText },
     { to: '/calendar', label: 'الكلندر الذكي', icon: CalendarDays, desktopOnly: true },
+    { to: '/reports', label: 'التقارير', icon: FileBarChart, desktopOnly: true },
     { to: '/requests', label: 'الطلبات', icon: Bell, badge: inbox.data?.length ?? 0, desktopOnly: true },
     { to: '/more', label: 'المزيد', icon: Ellipsis },
   ]

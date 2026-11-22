@@ -1,10 +1,12 @@
 import { useMemo, useState } from 'react'
-import { Archive as ArchiveIcon, Building2, LayoutGrid, UserRound, Users, UsersRound, type LucideIcon } from 'lucide-react'
+import { Archive as ArchiveIcon, Building2, FileDown, LayoutGrid, UserRound, Users, UsersRound, type LucideIcon } from 'lucide-react'
 import { useI18n } from '@/lib/i18n'
 import { useSession } from '@/lib/session'
 import { ARCHIVED, assetUnits, hasMine, personArchived, useAssets, usePeopleAll, usePersonalAll, useSharedAll, useStore } from '@/lib/data'
 import { date, matches } from '@/lib/format'
 import { Chip, Empty, IconBadge, Loading, PageHeader, SearchField, SectionTitle } from '@/components/ui'
+import { ReportPreview } from '@/components/ReportPreview'
+import { useReportSettings, type ReportDocument, type SummaryItem } from '@/lib/reports'
 
 /*
   الأرشيف — نفس مصادر ArchiveCenter في التطبيق (lib/data/archive_center.dart):
@@ -32,6 +34,8 @@ export default function Archive() {
   const store = useStore()
   const [source, setSource] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  const [preview, setPreview] = useState<ReportDocument | null>(null)
+  const settings = useReportSettings()
 
   const loading = personal.isLoading || shared.isLoading || people.isLoading || assets.isLoading
 
@@ -68,6 +72,43 @@ export default function Archive() {
 
   const list = rows.filter((r) => (!source || r.source === source) && matches(search, r.title, r.subtitle))
 
+  /** _exportArchivedRecords: ملف PDF بالمؤرشفات المعروضة الآن (القسم المختار + البحث). */
+  function exportList() {
+    if (!list.length) return
+    const now = new Date()
+    const stamp = String(now.getTime())
+    const query = search.trim()
+    const picked = source ?? 'الكل'
+    const items: SummaryItem[] = list.map((r) => ({
+      scope: r.source,
+      section: r.source,
+      type: r.source,
+      title: r.title,
+      subtitle: r.subtitle,
+      status: 'مؤرشف',
+      amount: 0,
+      date: null,
+      person: '',
+      payment: '',
+      createdAt: null,
+      searchText: '',
+      followsDate: true,
+      followDate: null,
+      canBeOverdue: true,
+    }))
+    setPreview({
+      title: picked === 'الكل' ? 'سجل المؤرشفات' : `سجل المؤرشفات — ${picked}`,
+      archive: true,
+      reference: `AR-${stamp.slice(-6)}`,
+      createdAt: now,
+      createdBy: settings.name,
+      criteria: [['القسم', picked], ...(query ? ([['كلمة البحث', query]] as [string, string][]) : [])],
+      items,
+      archivedAt: null,
+      archiveReason: '',
+    })
+  }
+
   return (
     <div>
       <PageHeader icon={ArchiveIcon} color="#0A5A50" title="الأرشيف" subtitle="ما أرشفته من كل الأقسام" back={false} />
@@ -80,7 +121,19 @@ export default function Archive() {
           return <Chip key={s.key} active={source === s.key} label={s.key} icon={s.icon} count={n} onClick={() => setSource(s.key)} />
         })}
       </div>
-      <SectionTitle count={list.length}>{t('العناصر المؤرشفة')}</SectionTitle>
+      <div className="flex items-end justify-between gap-2">
+        <SectionTitle count={list.length}>{t('العناصر المؤرشفة')}</SectionTitle>
+        {!loading && list.length > 0 && (
+          <button
+            type="button"
+            onClick={exportList}
+            className="mb-3 flex h-10 items-center gap-2 rounded-inner border border-line bg-white px-3 text-[12px] font-extrabold text-brand hover:bg-brand-soft"
+          >
+            <FileDown className="size-4" />
+            {t('تصدير المؤرشفات PDF')}
+          </button>
+        )}
+      </div>
       {loading ? (
         <Loading />
       ) : list.length === 0 ? (
@@ -113,6 +166,7 @@ export default function Archive() {
           <p className="mt-5 rounded-inner bg-surface px-4 py-3 text-[12px] text-sub">{t('لإلغاء الأرشفة افتح التطبيق.')}</p>
         </>
       )}
+      <ReportPreview doc={preview} onClose={() => setPreview(null)} />
     </div>
   )
 }
