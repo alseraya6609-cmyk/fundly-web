@@ -1,0 +1,139 @@
+@import "tailwindcss";
+
+/*
+  هوية فوندلي: نفس قيم AppTheme في التطبيق (lib/widgets/shared/app_design.dart)
+  ونفس خطه Cairo مضمَّنًا من ملفات التطبيق، فيبدو الموقع امتدادًا للتطبيق.
+*/
+@font-face {
+  font-family: "Cairo";
+  src: url("/fonts/Cairo-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Cairo";
+  src: url("/fonts/Cairo-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Cairo";
+  src: url("/fonts/Cairo-SemiBold.woff2") format("woff2");
+  font-weight: 600;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Cairo";
+  src: url("/fonts/Cairo-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Cairo";
+  src: url("/fonts/Cairo-ExtraBold.woff2") format("woff2");
+  font-weight: 800;
+  font-display: swap;
+}
+
+@theme {
+  --font-sans: "Cairo", system-ui, sans-serif;
+
+  /* الأخضر — لون الهوية */
+  --color-brand: #0a5a50;
+  --color-brand-dark: #04413b;
+  --color-brand-deep: #022e2a;
+  --color-brand-mid: #0e7161;
+  --color-brand-light: #178f7b;
+  --color-brand-tint: #d9ede8;
+  --color-brand-soft: #e9f4f1;
+
+  /* البرتقالي — لون التمييز من الشعار */
+  --color-gold: #ce8422;
+  --color-gold-dark: #a6691a;
+  --color-gold-light: #f2a93f;
+  --color-gold-soft: #fdefdc;
+
+  /* الأسطح والخطوط */
+  --color-page: #ffffff;
+  --color-surface: #edf2f0;
+  --color-field: #f3f7f6;
+  --color-line: #e1e9e6;
+  --color-hairline: #d6e2e0;
+
+  /* النصوص */
+  --color-title: #0f1f1c;
+  --color-ink: #1c2c29;
+  --color-body: #46534f;
+  --color-sub: #5c6b68;
+  --color-muted: #8c9a97;
+  --color-chevron: #76837f;
+
+  /* الخطر */
+  --color-danger: #c4392e;
+  --color-danger-soft: #fbe7e4;
+
+  /* ألوان الوحدات كما في الرئيسية */
+  --color-mod-shared: #2b8cb0;
+  --color-mod-people: #6b6fc7;
+  --color-mod-assets: #d9902a;
+
+  /* أنصاف أقطار AppTheme: البطاقة 24، الداخلي 16، الأيقونة 14، الحقل 18 */
+  --radius-card: 24px;
+  --radius-inner: 16px;
+  --radius-icon: 14px;
+  --radius-field: 18px;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    min-height: 100%;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background: var(--color-page);
+    color: var(--color-title);
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  button {
+    cursor: pointer;
+  }
+
+  button:disabled {
+    cursor: default;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-gold);
+    outline-offset: 2px;
+  }
+
+  /* الأرقام والبريد والروابط تبقى من اليسار لليمين داخل النص العربي */
+  .ltr {
+    direction: ltr;
+    unicode-bidi: isolate;
+  }
+}
+
+@layer components {
+  .card {
+    background: var(--color-surface);
+    border-radius: var(--radius-card);
+  }
+
+  .card-inner {
+    background: #ffffff;
+    border-radius: var(--radius-inner);
+  }
+
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}
