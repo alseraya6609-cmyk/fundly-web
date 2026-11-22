@@ -443,6 +443,9 @@ export function useInbox() {
     queryKey: ['inbox', user?.id],
     enabled: !!user,
     staleTime: STALE,
+    // مثل pollInbox: كل 30 ثانية والموقع مفتوح (ولو في تبويب آخر) للإشعارات.
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: true,
     // مثل pendingInbox في التطبيق: الجديد فقط، آخر 30.
     queryFn: () =>
       rows<InboxItem>(
@@ -552,6 +555,7 @@ export type CalendarRecord = {
   status?: string
   description?: string
   notes?: string
+  remindBeforeDays?: number
 }
 
 /** بنود «الكلندر الذكي» التي أضافها المستخدم (smart_calendar_records_v1). */

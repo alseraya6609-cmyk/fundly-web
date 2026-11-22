@@ -22,8 +22,11 @@ import { EXPENSE_SUBCATEGORIES, FINE_SUBCATEGORIES, FORMS, INCOME_SUBCATEGORIES,
   الأدوية: نمط الجرعات يكشف حقله وحده، وتسجيل التناول والتأجيل والتخطي
   سطر في «سجل الجرعات».
 
-  غير متاح في الموقع (من التطبيق فقط): أي نوع قديم، وبدء عهدة جديدة،
-  وبدء كورس دواء جديد ودواء آخر من نفس الوصفة.
+  بدء عهدة جديدة / كورس جديد (newCourse): نفس السجل، والحالي ينتقل إلى
+  «سجل العهد السابقة» (عهدة رقم N بكل معلوماتها وصرفياتها) أو «سجل الكورسات»
+  (كورس N)، والرقم يزيد واحدًا والحالة «نشطة». ودواء آخر من نفس الوصفة: سجل
+  جديد بنفس البيانات، والاسم والجرعة والقياسات فارغة، ويُجمع بمعرّف أولها
+  («مجموعة الوصفة»).
 */
 
 export { FORMS }
@@ -37,6 +40,11 @@ export const CUSTOM = 'مخصص'
 export const LEAD_HOURS = 'مخصص بالساعات'
 export const LEAD_DAYS = 'مخصص بالأيام'
 const EDIT_LOG_KEY = 'سجل التعديلات'
+export const CUSTODY_LOG_KEY = 'سجل العهد السابقة'
+export const COURSE_LOG_KEY = 'سجل الكورسات'
+const PRESCRIPTION_GROUP_KEY = 'مجموعة الوصفة'
+/** ما يتغيّر بين أدوية الوصفة الواحدة (_perMedicineFields). */
+const PER_MEDICINE_FIELDS = ['اسم الدواء', 'الاسم العلمي', 'الجرعة', 'وحدة الجرعة', 'التركيز', 'شكل الدواء']
 const REMINDER_LABELS = new Set(['تذكيرات', 'تذكير', 'التذكيرات'])
 
 /** قائمة الإضافة كما في التطبيق (_entryCategories) بالأنواع المتاحة في الموقع. */
@@ -184,12 +192,24 @@ function installmentExtra(rows: Installment[], equalSplit: boolean, unit: string
 }
 
 /** ما يلزم الحفظ غير حقول النموذج. */
-export type SaveExtras = { me: Me; installments?: Installment[]; equalSplit?: boolean; link?: Record<string, string> }
-
-/** هل يُعدَّل هذا السجل من الموقع؟ (نوع متاح، وصاحبه أنا) */
-export function canEdit(entry: Entry, userId: string | undefined): boolean {
-  return !!userId && entry.user_id === userId && entry.entry_type in FORMS && entry.status !== 'محذوف'
+export type SaveExtras = {
+  me: Me
+  installments?: Installment[]
+  equalSplit?: boolean
+  link?: Record<string, string>
+  /** بدء عهدة جديدة / كورس جديد على السجل نفسه. */
+  newCourse?: boolean
+  /** دواء آخر من نفس الوصفة: الدواء الذي نُسخ منه. */
+  prescriptionOf?: Entry
 }
+
+/** هل يُعدَّل هذا السجل من الموقع؟ (صاحبه أنا. والنوع القديم بلا نموذج: «تعديل الالتزام» العام) */
+export function canEdit(entry: Entry, userId: string | undefined): boolean {
+  return !!userId && entry.user_id === userId && entry.status !== 'محذوف'
+}
+
+/** نوع قديم بلا نموذج إضافة: يُعدَّل بالنموذج العام (_openEditForm). */
+export const isLegacyType = (entry: Entry) => !(entry.entry_type in FORMS)
 
 // ---------------- الحقول ----------------
 
@@ -286,8 +306,11 @@ function displayDate(value: string | null): string {
   return m ? `${parseInt(m[3], 10)}/${parseInt(m[2], 10)}/${m[1]}` : value
 }
 
-/** قيم النموذج: فارغة للإضافة، ومن السجل للتعديل (_openFinancialEntryForm). */
-export function initialValues(form: EntryForm, entry?: Entry, defaultCurrency = ''): { values: Values; custom: Values } {
+export type InitMode = { newCourse?: boolean; sameVisit?: boolean }
+
+/** قيم النموذج: فارغة للإضافة، ومن السجل للتعديل (_openFinancialEntryForm).
+    [mode.sameVisit]: [entry] دواء الوصفة الذي يُنسخ منه. */
+export function initialValues(form: EntryForm, entry?: Entry, defaultCurrency = '', mode: InitMode = {}): { values: Values; custom: Values } {
   const values: Values = {}
   const custom: Values = {}
   for (const field of form.fields) {
@@ -312,6 +335,13 @@ export function initialValues(form: EntryForm, entry?: Entry, defaultCurrency = 
       }
     }
     values[field.label] = value
+  }
+  // دواء آخر من نفس الوصفة: كل البيانات كما هي، ويُكتب اسم الدواء وجرعته فقط.
+  if (mode.sameVisit) for (const label of PER_MEDICINE_FIELDS) if (label in values) values[label] = ''
+  // العهدة الجديدة: نفس البيانات، والتاريخ اليوم وحالتها من جديد.
+  if (mode.newCourse && form.label === 'عهدة مالية') {
+    for (const field of form.fields) if (field.kind === 'date') values[field.label] = dmy(new Date())
+    if ('حالة العهدة' in values) values['حالة العهدة'] = ''
   }
   if ('العملة' in values && !values['العملة'].trim()) values['العملة'] = defaultCurrency
   return { values, custom }
@@ -449,27 +479,87 @@ function extrasFor(form: EntryForm, values: Values, defaultCurrency: string, ext
   return { extra: {} }
 }
 
-export async function createEntry(form: EntryForm, values: Values, custom: Values, defaultCurrency: string, attachment?: File | null, extras?: SaveExtras) {
+export async function createEntry(form: EntryForm, values: Values, custom: Values, defaultCurrency: string, attachment?: File | null, extras?: SaveExtras): Promise<Entry | null> {
   const userId = await currentUserId()
   const { extra, due } = extrasFor(form, values, defaultCurrency, extras)
+  // أدوية الوصفة الواحدة تُجمع بمعرّف أولها.
+  const source = extras?.prescriptionOf
+  if (source) extra[PRESCRIPTION_GROUP_KEY] = String(source.details?.[PRESCRIPTION_GROUP_KEY] ?? '').trim() || source.id
   // ربط البند بفرد عند الإضافة من تفاصيله (linkDetails).
   let details = { ...detailsFrom(form, values, custom, defaultCurrency), ...extra, ...(extras?.link ?? {}) }
   const core = coreFrom(form, details)
   if (due) core.dueDate = due
   if (extras?.me) details = withAssignment(form.label, details, holderNameOf(details), extras.me)
   const attachmentUrl = attachment ? await uploadAttachment(userId, attachment) : null
-  const { error } = await supabase.from(TABLE).insert({
-    user_id: userId,
-    category: PERSONAL_SLUG[form.label] ?? 'organization',
-    entry_type: form.label,
-    title: core.title,
-    amount: parseAmountInt(core.amountText),
-    due_date: databaseDate(core.dueDate),
-    status: STATUS_ACTIVE,
-    details,
-    attachment_url: attachmentUrl,
-  })
+  const { data, error } = await supabase
+    .from(TABLE)
+    .insert({
+      user_id: userId,
+      category: PERSONAL_SLUG[form.label] ?? 'organization',
+      entry_type: form.label,
+      title: core.title,
+      amount: parseAmountInt(core.amountText),
+      due_date: databaseDate(core.dueDate),
+      status: STATUS_ACTIVE,
+      details,
+      attachment_url: attachmentUrl,
+    })
+    .select('*')
   if (error) throw error
+  const row = Array.isArray(data) ? data[0] : data
+  return (row as Entry | undefined) ?? null
+}
+
+const jsonRows = (raw: string | undefined): Record<string, string>[] => {
+  try {
+    const parsed = JSON.parse(raw || '[]')
+    return Array.isArray(parsed)
+      ? parsed.filter((r) => r && typeof r === 'object').map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, String(v)])))
+      : []
+  } catch {
+    return []
+  }
+}
+
+/** _custodyTotalSpent: المعتمد وما لا يحتاج اعتمادًا، وما سُجّل خطأً دفعاتٍ. */
+function custodySpentOf(details: Record<string, string>) {
+  const counted = jsonRows(details['سجل صرفيات العهدة']).filter((r) => r['حالة الاعتماد'] !== 'بانتظار الاعتماد' && r['حالة الاعتماد'] !== 'مرفوض')
+  return counted.reduce((s, r) => s + parseAmountInt(r['المبلغ'] ?? ''), 0) + totalPaid(details)
+}
+
+/** رقم العهدة الحالية (ما ستُحفظ به في السجل عند بدء عهدة جديدة). */
+export const custodyNumber = (details: Record<string, unknown> | undefined) =>
+  parseInt(String(details?.['رقم العهدة'] ?? ''), 10) || jsonRows(String(details?.[CUSTODY_LOG_KEY] ?? '[]')).length + 1
+
+/** بدء عهدة جديدة / كورس جديد: الحالي إلى سجله والرقم +1 (_saveFinancialEntry). */
+function startNewCourse(form: EntryForm, entry: Entry, old: Record<string, string>, merged: Record<string, string>) {
+  const total = Math.round(Number(entry.amount) || 0)
+  if (form.label === 'عهدة مالية') {
+    // العهدة الحالية تنتقل إلى السجل «عهدة رقم N» بكل معلوماتها وصرفياتها،
+    // والجديدة تبدأ بلا صرفيات ولا زيادات.
+    const log = jsonRows(old[CUSTODY_LOG_KEY])
+    const number = custodyNumber(old)
+    const spent = custodySpentOf(old)
+    const row: Record<string, string> = { العهدة: `عهدة رقم ${number}` }
+    for (const field of form.fields) if (!field.hidden && (old[field.label] ?? '').trim()) row[field.label] = old[field.label].trim()
+    row['قيمة العهدة'] = String(total)
+    row['المصروف'] = String(spent)
+    row['المتبقي'] = String(total - spent)
+    row['الحالة'] = entry.status ?? ''
+    if (old['سجل صرفيات العهدة']) row['سجل صرفيات العهدة'] = old['سجل صرفيات العهدة']
+    if (old['سجل زيادات العهدة']) row['سجل زيادات العهدة'] = old['سجل زيادات العهدة']
+    merged[CUSTODY_LOG_KEY] = JSON.stringify([...log, row])
+    merged['رقم العهدة'] = String(number + 1)
+    for (const key of ['سجل صرفيات العهدة', 'سجل دفعات الالتزام', 'سجل زيادات العهدة', 'تاريخ التسوية', 'المبلغ المعاد عند التسوية', 'تاريخ الإلغاء']) delete merged[key]
+    return
+  }
+  // الكورس الحالي ينتقل إلى السجل باسم «كورس N»، والجديد = N+1.
+  const courses = jsonRows(old[COURSE_LOG_KEY])
+  const number = parseInt(old['رقم الكورس'] ?? '', 10) || courses.length + 1
+  const row: Record<string, string> = { الكورس: `كورس ${number}` }
+  for (const field of form.fields) if ((old[field.label] ?? '').trim()) row[field.label] = old[field.label].trim()
+  merged[COURSE_LOG_KEY] = JSON.stringify([...courses, row])
+  merged['رقم الكورس'] = String(number + 1)
 }
 
 type Row = {
@@ -622,6 +712,7 @@ export async function updateEntry(entry: Entry, form: EntryForm, values: Values,
   let merged: Record<string, string> = {}
   for (const [k, v] of Object.entries(old)) if (!labels.has(k) && !k.startsWith('القسط ')) merged[k] = v
   Object.assign(merged, details)
+  if (extras?.newCourse) startNewCourse(form, entry, old, merged)
   // تغيّر الرقم التعريفي: إسناد جديد بانتظار قبول الشخص الجديد.
   if (SHARED_TYPES.has(form.label) && extras?.me) {
     const idLabel = idLabelOf(form.label)
@@ -651,8 +742,45 @@ export async function updateEntry(entry: Entry, form: EntryForm, values: Values,
     title: core.title,
     amount: core.amountText ? parseAmountInt(core.amountText) : current.amount,
     due_date: databaseDate(core.dueDate),
+    status: extras?.newCourse ? STATUS_ACTIVE : current.status,
     details: merged,
     attachment_url: attachmentUrl,
+  })
+}
+
+// ---------------- تعديل الالتزام العام (_openEditForm) ----------------
+
+export const LEGACY_STATUSES = ['نشطة', 'قريبة الاستحقاق', 'متأخرة', 'مكتملة', 'مؤرشف', 'ملغاة', 'تمت التسوية']
+
+/** مفاتيح التفاصيل التي تُعدَّل نصًّا: غير السجلات (JSON) والمفاتيح الداخلية. */
+export function legacyEditableKeys(entry: Entry): string[] {
+  return Object.entries(asStrings(entry.details))
+    .filter(([k, v]) => /[\u0600-\u06FF]/.test(k) && !k.startsWith('_') && !k.startsWith('عهدة_') && !/^[[{]/.test(v.trim()))
+    .map(([k]) => k)
+}
+
+export type LegacyValues = { title: string; amount: string; dueDate: string; status: string; details: Record<string, string> }
+
+export function validateLegacy(v: LegacyValues): string | null {
+  if (!v.title.trim()) return 'يرجى إدخال اسم الالتزام'
+  const amount = Number(latin(v.amount.trim()))
+  if (!v.amount.trim() || !Number.isFinite(amount) || amount < 0) return 'أدخل مبلغاً صحيحاً'
+  return null
+}
+
+/** الحقول الظاهرة تُستبدل (والفارغ يُحذف)، والسجلات والمفاتيح الداخلية تبقى كما هي. */
+export async function updateLegacyEntry(entry: Entry, v: LegacyValues) {
+  const old = asStrings(entry.details)
+  const details: Record<string, string> = {}
+  for (const [k, value] of Object.entries(old)) if (!(k in v.details)) details[k] = value
+  for (const [k, value] of Object.entries(v.details)) if (value.trim()) details[k] = value.trim()
+  await updateMerged(entry, {
+    ...rowOf(entry),
+    title: v.title.trim(),
+    amount: Math.round(Number(latin(v.amount.trim())) || 0),
+    due_date: databaseDate(v.dueDate.trim()),
+    status: v.status,
+    details,
   })
 }
 

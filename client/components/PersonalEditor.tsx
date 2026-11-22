@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { BadgeCheck, CalendarDays, ChevronLeft, ChevronRight, Paperclip, Plus, X } from 'lucide-react'
+import { BadgeCheck, CalendarDays, ChevronLeft, ChevronRight, Loader2, Paperclip, Plus, X } from 'lucide-react'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/format'
 import { errorText } from '@/lib/supabase'
@@ -19,6 +19,7 @@ import {
   CUSTOM,
   DEBT_ID_LABEL,
   FORMS,
+  LEGACY_STATUSES,
   LEAD_DAYS,
   LEAD_HOURS,
   addMonthsClamped,
@@ -35,7 +36,11 @@ import {
   splitEqually,
   subcategoriesFor,
   updateEntry,
+  updateLegacyEntry,
+  legacyEditableKeys,
   validate,
+  validateLegacy,
+  type LegacyValues,
   type EntryForm,
   type FormField,
   type Installment,
@@ -458,7 +463,27 @@ function InstallmentsTable({
 
 const dmyOf = (d: Date) => `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}`
 
-function FormBody({ form, entry, prefill, link, onDone }: { form: EntryForm; entry?: Entry; prefill?: Values; link?: Record<string, string>; onDone: (message: string) => void }) {
+function FormBody({
+  form,
+  entry,
+  prefill,
+  link,
+  newCourse = false,
+  copyFrom,
+  onDone,
+  onAnother,
+}: {
+  form: EntryForm
+  entry?: Entry
+  prefill?: Values
+  link?: Record<string, string>
+  /** بدء عهدة جديدة / كورس جديد على [entry] نفسه. */
+  newCourse?: boolean
+  /** دواء آخر من نفس الوصفة: يُنسخ منه، ويُحفظ سجلًا جديدًا. */
+  copyFrom?: Entry
+  onDone: (message: string) => void
+  onAnother?: (saved: Entry) => void
+}) {
   const { t } = useI18n()
   const currency = useCurrency()
   const qc = useQueryClient()
@@ -466,11 +491,11 @@ function FormBody({ form, entry, prefill, link, onDone }: { form: EntryForm; ent
   const store = useStore()
   const me = { fnd: profile?.fnd_id ?? '', name: publicName(store.data, profile?.display_name ?? '') }
   const start = useMemo(() => {
-    const init = initialValues(form, entry, currency)
+    const init = initialValues(form, entry ?? copyFrom, currency, { newCourse, sameVisit: !entry && !!copyFrom })
     // القيم المعبّأة مسبقًا (من تفاصيل فرد) لحقول النموذج وحدها.
     if (!entry && prefill) for (const [k, v] of Object.entries(prefill)) if (k in init.values) init.values[k] = v
     return init
-  }, [form, entry, currency, prefill])
+  }, [form, entry, copyFrom, newCourse, currency, prefill])
   const [values, setValues] = useState<Values>(start.values)
   const [custom, setCustomState] = useState<Values>(start.custom)
   const [file, setFile] = useState<File | null>(null)
@@ -489,7 +514,17 @@ function FormBody({ form, entry, prefill, link, onDone }: { form: EntryForm; ent
   const count = isInstallment ? installmentCount(values['عدد الأقساط'] ?? '') : 0
   const visibleRows = instStore.slice(0, count)
   const installments = equalSplit ? splitEqually(values['المبلغ الإجمالي'] ?? '', visibleRows) : visibleRows
-  const extras = { me, installments: isInstallment ? installments : undefined, equalSplit, link: entry ? undefined : link }
+  const extras = {
+    me,
+    installments: isInstallment ? installments : undefined,
+    equalSplit,
+    link: entry ? undefined : link,
+    newCourse: !!entry && newCourse,
+    prescriptionOf: entry ? undefined : copyFrom,
+  }
+  const isCustody = form.label === 'عهدة مالية'
+  // دواء جديد: «إضافة دواء آخر» من نفس الوصفة في نافذة التأكيد (_askMedicineSave).
+  const medicineNew = !entry && form.label === 'أدوية'
 
   function ask() {
     const problem = validate(form, values, custom, { me: me.fnd, installments: extras.installments })
@@ -500,15 +535,25 @@ function FormBody({ form, entry, prefill, link, onDone }: { form: EntryForm; ent
     }
   }
 
-  async function save() {
+  async function save(addAnother = false) {
     setBusy(true)
     setSaveError('')
     try {
+      let created: Entry | null = null
       if (entry) await updateEntry(entry, form, values, custom, currency, file, extras)
-      else await createEntry(form, values, custom, currency, file, extras)
+      else created = await createEntry(form, values, custom, currency, file, extras)
       await qc.invalidateQueries({ queryKey: ['personal'] })
       setConfirming(false)
-      onDone(entry ? 'تم حفظ التعديل بنجاح' : 'تم الحفظ بنجاح')
+      if (addAnother && created && onAnother) return onAnother(created)
+      onDone(
+        !entry
+          ? 'تم الحفظ بنجاح'
+          : newCourse
+            ? isCustody
+              ? 'بدأت عهدة جديدة، والسابقة في السجل'
+              : 'بدأ كورس جديد، والسابق في السجل'
+            : 'تم حفظ التعديل بنجاح',
+      )
     } catch (e) {
       setSaveError(errorText(e) || 'تعذّر الحفظ. تحقّق من الإنترنت ثم حاول مجددًا.')
     } finally {
@@ -521,7 +566,13 @@ function FormBody({ form, entry, prefill, link, onDone }: { form: EntryForm; ent
   return (
     <div>
       <p className="text-[18px] font-extrabold text-title">
-        {entry ? `${t('تعديل بيانات')} ${t(form.label)}` : `${t('إضافة')} ${t(form.label)}`}
+        {entry && newCourse
+          ? t(isCustody ? 'بدء عهدة جديدة' : 'بدء كورس جديد')
+          : entry
+            ? `${t('تعديل بيانات')} ${t(form.label)}`
+            : copyFrom
+              ? t('دواء آخر من نفس الوصفة')
+              : `${t('إضافة')} ${t(form.label)}`}
       </p>
       <p className="mt-0.5 text-[12px] text-muted">{t(form.subtitle)}</p>
       <div className="mt-4 grid grid-cols-2 gap-3">
@@ -586,10 +637,190 @@ function FormBody({ form, entry, prefill, link, onDone }: { form: EntryForm; ent
       >
         {t(entry ? 'حفظ التعديل' : 'حفظ')}
       </button>
+      {medicineNew ? (
+        confirming && <MedicineSaveConfirm busy={busy} error={saveError} onPick={(add) => save(add)} onCancel={() => setConfirming(false)} />
+      ) : (
+        <Confirm
+          open={confirming}
+          title={entry && newCourse ? (isCustody ? 'بدء عهدة جديدة' : 'بدء كورس جديد') : entry ? 'تأكيد التعديل' : 'تأكيد الحفظ'}
+          message={t(
+            entry && newCourse
+              ? isCustody
+                ? 'ستبدأ عهدة جديدة، وتُحفظ الحالية بكل معلوماتها في السجل. هل تريد المتابعة؟'
+                : 'سيبدأ كورس جديد ويُنقل الحالي إلى السجل. هل تريد المتابعة؟'
+              : entry
+                ? 'هل تريد حفظ التعديل؟'
+                : 'هل تريد حفظ البيانات؟',
+          )}
+          busy={busy}
+          error={saveError}
+          onConfirm={() => save()}
+          onCancel={() => setConfirming(false)}
+        />
+      )}
+    </div>
+  )
+}
+
+/** تأكيد حفظ دواء جديد: «إضافة دواء آخر» و«إلغاء» تحت السؤال، و«تأكيد» (_askMedicineSave). */
+function MedicineSaveConfirm({ busy, error, onPick, onCancel }: { busy: boolean; error: string; onPick: (addAnother: boolean) => void; onCancel: () => void }) {
+  const { t } = useI18n()
+  return (
+    <div className="fixed inset-0 z-[60] grid place-items-center bg-brand-deep/40 p-4" onClick={busy ? undefined : onCancel}>
+      <div role="alertdialog" aria-modal="true" onClick={(e) => e.stopPropagation()} className="w-full max-w-sm rounded-card bg-white p-5 shadow-2xl">
+        <p className="text-[17px] font-extrabold text-title">{t('تأكيد الحفظ')}</p>
+        <p className="mt-2 text-[13px] leading-relaxed text-sub">{t('هل تريد حفظ الدواء؟')}</p>
+        {error && <p className="mt-3 rounded-inner bg-danger-soft px-3 py-2 text-[12px] font-bold text-danger">{t(error)}</p>}
+        <div className="mt-5 flex items-end gap-2">
+          <div className="flex flex-col items-start">
+            <button type="button" disabled={busy} onClick={() => onPick(true)} className="px-1.5 py-1 text-[13px] font-bold text-brand disabled:opacity-60">
+              {t('إضافة دواء آخر')}
+            </button>
+            <button type="button" disabled={busy} onClick={onCancel} className="px-1.5 py-1 text-[13px] font-bold text-muted disabled:opacity-60">
+              {t('إلغاء')}
+            </button>
+          </div>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => onPick(false)}
+            className="ms-auto flex h-11 min-w-28 items-center justify-center gap-2 rounded-field bg-brand px-5 text-[14px] font-extrabold text-white hover:bg-brand-dark disabled:opacity-60"
+          >
+            {busy && <Loader2 className="size-4 animate-spin" />}
+            {t('تأكيد')}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** بعد حفظ الدواء واختيار «إضافة دواء آخر»: تنبيه بما سيحدث ثم النموذج (_offerSamePrescription). */
+function SamePrescriptionNotice({ saved, onContinue }: { saved: Entry; onContinue: () => void }) {
+  const { t } = useI18n()
+  return (
+    <div className="fixed inset-0 z-[60] grid place-items-center bg-brand-deep/40 p-4" onClick={onContinue}>
+      <div role="alertdialog" aria-modal="true" onClick={(e) => e.stopPropagation()} className="w-full max-w-sm rounded-card bg-white p-5 shadow-2xl">
+        <p dir="auto" className="text-[17px] font-extrabold text-title">
+          {t('تم حفظ')} «{saved.title}»
+        </p>
+        <p className="mt-2 text-[13px] leading-relaxed text-sub">{t('الدواء الآخر سيتم بنفس المعلومات السابقة للدواء، فأرجو التعديل.')}</p>
+        <button type="button" onClick={onContinue} className="mt-5 h-11 w-full rounded-field bg-brand text-[14px] font-extrabold text-white hover:bg-brand-dark">
+          {t('متابعة')}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+const isoOfDmy = (value: string) => {
+  const d = parseDmy(value)
+  return d ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` : ''
+}
+const dmyOfIso = (iso: string) => {
+  const [y, m, d] = iso.split('-').map(Number)
+  return y && m && d ? `${d}/${m}/${y}` : ''
+}
+
+/** نوع قديم بلا نموذج: «تعديل الالتزام» العام بالاسم والمبلغ والاستحقاق والحالة والبيانات (_openEditForm). */
+function LegacyForm({ entry, onDone }: { entry: Entry; onDone: (message: string) => void }) {
+  const { t } = useI18n()
+  const qc = useQueryClient()
+  const keys = useMemo(() => legacyEditableKeys(entry), [entry])
+  const due = entry.due_date ? String(entry.due_date).slice(0, 10) : ''
+  const [v, setV] = useState<LegacyValues>(() => ({
+    title: entry.title ?? '',
+    amount: String(Math.round(Number(entry.amount) || 0)),
+    dueDate: due ? dmyOfIso(due) : '',
+    status: entry.status || 'نشطة',
+    details: Object.fromEntries(keys.map((k) => [k, String(entry.details?.[k] ?? '')])),
+  }))
+  const [error, setError] = useState('')
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [saveError, setSaveError] = useState('')
+  const statuses = LEGACY_STATUSES.includes(v.status) ? LEGACY_STATUSES : [v.status, ...LEGACY_STATUSES]
+  const input = 'h-11 w-full rounded-field bg-field px-3 text-[13px] text-title outline-none ring-1 ring-line focus:ring-2 focus:ring-gold'
+
+  async function save() {
+    setBusy(true)
+    setSaveError('')
+    try {
+      await updateLegacyEntry(entry, v)
+      await qc.invalidateQueries({ queryKey: ['personal'] })
+      setConfirming(false)
+      onDone('تم حفظ التعديل بنجاح')
+    } catch (e) {
+      setSaveError(errorText(e) || 'تعذر تحديث الالتزام. حاول مرة أخرى.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div>
+      <p className="text-[18px] font-extrabold text-title">{t('تعديل الالتزام')}</p>
+      <p className="mt-0.5 text-[12px] text-muted">{t('حدّث البيانات ثم احفظ التغييرات')}</p>
+      <div className="mt-4 grid grid-cols-2 gap-3">
+        <label className="col-span-2 block">
+          <span className="mb-1 block text-[12px] font-bold text-body">{t('اسم الالتزام')}</span>
+          <input dir="auto" value={v.title} onChange={(e) => setV({ ...v, title: e.target.value })} className={input} />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[12px] font-bold text-body">{t('المبلغ')}</span>
+          <input inputMode="decimal" dir="ltr" value={v.amount} onChange={(e) => setV({ ...v, amount: e.target.value })} className={input} />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[12px] font-bold text-body">{t('تاريخ الاستحقاق')}</span>
+          <input type="date" value={isoOfDmy(v.dueDate)} onChange={(e) => setV({ ...v, dueDate: dmyOfIso(e.target.value) })} className={input} />
+        </label>
+        <label className="col-span-2 block">
+          <span className="mb-1 block text-[12px] font-bold text-body">{t('الحالة')}</span>
+          <select value={v.status} onChange={(e) => setV({ ...v, status: e.target.value })} className={input}>
+            {statuses.map((s) => (
+              <option key={s} value={s}>
+                {t(s)}
+              </option>
+            ))}
+          </select>
+        </label>
+        {keys.length > 0 && <p className="col-span-2 mt-1 text-[13px] font-extrabold text-title">{t('بيانات الالتزام')}</p>}
+        {keys.map((k) => (
+          <label key={k} className="col-span-2 block">
+            <span className="mb-1 block text-[12px] font-bold text-body">{t(k)}</span>
+            {k.includes('ملاحظ') ? (
+              <textarea
+                dir="auto"
+                rows={3}
+                value={v.details[k]}
+                onChange={(e) => setV({ ...v, details: { ...v.details, [k]: e.target.value } })}
+                className="w-full rounded-field bg-field px-3 py-2 text-[13px] text-title outline-none ring-1 ring-line focus:ring-2 focus:ring-gold"
+              />
+            ) : (
+              <input dir="auto" value={v.details[k]} onChange={(e) => setV({ ...v, details: { ...v.details, [k]: e.target.value } })} className={input} />
+            )}
+          </label>
+        ))}
+      </div>
+      {error && <p className="mt-3 rounded-inner bg-danger-soft px-3 py-2 text-[12px] font-bold text-danger">{t(error)}</p>}
+      <button
+        type="button"
+        onClick={() => {
+          const problem = validateLegacy(v)
+          setError(problem ?? '')
+          if (!problem) {
+            setSaveError('')
+            setConfirming(true)
+          }
+        }}
+        className="mt-5 flex h-13 w-full items-center justify-center rounded-field bg-brand py-3.5 text-[15px] font-extrabold text-white hover:bg-brand-dark"
+      >
+        {t('حفظ التعديل')}
+      </button>
       <Confirm
         open={confirming}
-        title={entry ? 'تأكيد التعديل' : 'تأكيد الحفظ'}
-        message={t(entry ? 'هل تريد حفظ التعديل؟' : 'هل تريد حفظ البيانات؟')}
+        title="تأكيد التعديل"
+        message={t('هل تريد حفظ التعديل؟')}
         busy={busy}
         error={saveError}
         onConfirm={save}
@@ -606,6 +837,7 @@ export function PersonalEditor({
   startType,
   prefill,
   link,
+  newCourse = false,
   onClose,
   onSaved,
 }: {
@@ -614,14 +846,21 @@ export function PersonalEditor({
   startType?: string
   prefill?: Values
   link?: Record<string, string>
+  /** «بدء عهدة جديدة» / «بدء كورس جديد» على [entry]. */
+  newCourse?: boolean
   onClose: () => void
   onSaved: (message: string) => void
 }) {
   const { t, dir } = useI18n()
   const { hidden } = useSession()
   const [type, setType] = useState<string | null>(null)
+  // سلسلة «إضافة دواء آخر من نفس الوصفة»: آخر دواء حُفظ، ثم نموذج منسوخ منه.
+  const [savedMedicine, setSavedMedicine] = useState<Entry | null>(null)
+  const [copyFrom, setCopyFrom] = useState<Entry | null>(null)
   useEffect(() => {
     if (open) setType(entry ? entry.entry_type : (startType ?? null))
+    setSavedMedicine(null)
+    setCopyFrom(null)
   }, [open, entry, startType])
   const form = type ? FORMS[type] : null
   const Back = dir === 'rtl' ? ChevronRight : ChevronLeft
@@ -633,15 +872,36 @@ export function PersonalEditor({
 
   return (
     <Sheet open={open} onClose={onClose}>
-      {form ? (
+      {entry && !FORMS[entry.entry_type] ? (
+        <LegacyForm key={entry.id} entry={entry} onDone={onSaved} />
+      ) : form ? (
         <>
-          {!entry && !startType && (
+          {!entry && !startType && !copyFrom && (
             <button type="button" onClick={() => setType(null)} className="mb-2 flex items-center gap-1 text-[12px] font-bold text-brand">
               <Back className="size-4" />
               {t('اختر نوعًا آخر')}
             </button>
           )}
-          <FormBody key={`${type}-${entry?.id ?? 'new'}`} form={form} entry={entry} prefill={prefill} link={link} onDone={onSaved} />
+          <FormBody
+            key={`${type}-${entry?.id ?? 'new'}-${copyFrom?.id ?? ''}-${newCourse}`}
+            form={form}
+            entry={entry}
+            prefill={copyFrom ? undefined : prefill}
+            link={link}
+            newCourse={newCourse}
+            copyFrom={copyFrom ?? undefined}
+            onDone={onSaved}
+            onAnother={setSavedMedicine}
+          />
+          {savedMedicine && (
+            <SamePrescriptionNotice
+              saved={savedMedicine}
+              onContinue={() => {
+                setCopyFrom(savedMedicine)
+                setSavedMedicine(null)
+              }}
+            />
+          )}
         </>
       ) : (
         <div>

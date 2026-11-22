@@ -52,8 +52,15 @@ export type CalItem = {
   repeat: string
   isUserCreated: boolean
   isExpiry: boolean
+  /** أيام التذكير قبل الموعد: -1 = الافتراضي من الإعدادات، NO_REMINDER = بدون. */
+  remindBeforeDays: number
+  /** «وقت التذكير» بالدقائق قبل الموعد (التذكير المفعّل)، أو -1. */
+  leadMinutes: number
   to?: string
 }
+
+/** HomeDashboardService.noReminder */
+export const NO_REMINDER = -2
 
 export type Metrics = {
   personalMoney: number
@@ -160,7 +167,7 @@ export function entryNextRepeatDate(first: Date | null, details: Record<string, 
 }
 
 /** HomeDashboardService.nextOccurrence */
-function nextOccurrence(due: Date, repeat: string, today: Date) {
+export function nextOccurrence(due: Date, repeat: string, today: Date) {
   const r = repeat.trim()
   const months = ['شهري', 'شهريًا'].includes(r) ? 1 : ['ربع سنوي', 'كل 3 شهور'].includes(r) ? 3 : ['نصف سنوي', 'كل 6 شهور'].includes(r) ? 6 : ['سنوي', 'سنويًا', 'شهر أختاره'].includes(r) ? 12 : 0
   const days = ['يومي', 'يوميًا'].includes(r) ? 1 : ['أسبوعي', 'أسبوعيًا'].includes(r) ? 7 : 0
@@ -232,6 +239,43 @@ export function entryOutcomeStatus(type: string, due: Date | null, details: Reco
   return null
 }
 
+/** reminderLeadMinutes: «قبل ساعة» / «قبل N ساعة|يوم» بالدقائق. */
+export function reminderLeadMinutes(raw: string) {
+  const s = latinDigits(raw.trim())
+  if (!s) return -1
+  if (s === 'قبل يوم') return 1440
+  if (s === 'قبل ساعة') return 60
+  const m = s.match(/قبل\s*(\d+)\s*(ساعة|ساعات|يوم|أيام)/)
+  if (!m) return -1
+  const n = parseInt(m[1], 10)
+  return m[2].startsWith('ساع') ? n * 60 : n * 1440
+}
+
+/** _leadMinutesOf: حين يكون التذكير مفعّلًا. */
+function leadMinutesOf(details: Record<string, unknown>) {
+  if (str(details['تفعيل تذكير']) !== 'نعم') return -1
+  return reminderLeadMinutes(str(details['وقت التذكير']))
+}
+
+/** _reminderDaysOf: أيام التذكير من حقل التذكير في السجل. */
+function reminderDaysOf(details: Record<string, unknown>) {
+  for (const key of ['التذكير قبل الانتهاء', 'تذكيرات', 'تذكير', 'التذكيرات']) {
+    let raw = str(details[key])
+    if (!raw) continue
+    if (raw.includes('بدون')) return NO_REMINDER
+    raw = latinDigits(raw)
+    const known = ({ 'قبل يوم': 1, 'قبل 3 أيام': 3, 'قبل أسبوع': 7, 'قبل أسبوعين': 14, 'قبل شهر': 30 } as Record<string, number>)[raw] ?? 0
+    if (known > 0) return known
+    if (raw.includes('يومين')) return 2
+    if (raw.includes('شهرين')) return 60
+    const n = raw.match(/\d+/)
+    const unit = raw.includes('شهر') ? 30 : raw.includes('أسبوع') || raw.includes('اسبوع') ? 7 : 1
+    if (n) return parseInt(n[0], 10) * unit
+    if (raw.includes('شهر')) return 30
+  }
+  return -1
+}
+
 function entryTimeOf(details: Record<string, unknown>) {
   const reminder = str(details['وقت التذكير'])
   if (str(details['تفعيل تذكير']) === 'نعم' && /^\d{1,2}:\d{2}/.test(reminder)) return reminder
@@ -298,6 +342,8 @@ function item(partial: Partial<CalItem> & Pick<CalItem, 'title' | 'module' | 'da
     repeat: '',
     isUserCreated: false,
     isExpiry: false,
+    remindBeforeDays: -1,
+    leadMinutes: -1,
     ...partial,
   }
 }
@@ -357,6 +403,13 @@ export function useMetrics(): { loading: boolean; metrics: Metrics } {
             time: entryTimeOf(d),
             repeat: recurring ? repeat : '',
             isExpiry: isDocument,
+            leadMinutes: leadMinutesOf(d),
+            remindBeforeDays: (() => {
+              const days = reminderDaysOf(d)
+              const lead = leadMinutesOf(d)
+              // تذكير بالساعات: يظهر في التنبيهات من اليوم الذي يقع فيه.
+              return days === -1 && lead > 0 ? Math.floor((lead + 1439) / 1440) : days
+            })(),
             to: `/me?open=${e.id}`,
           }),
         )
@@ -394,7 +447,7 @@ export function useMetrics(): { loading: boolean; metrics: Metrics } {
       if (!expiry || Number.isNaN(expiry.getTime())) continue
       const day = new Date(expiry.getFullYear(), expiry.getMonth(), expiry.getDate())
       if (assetModules.has(r.module) && !r.id.includes('payment') && day <= in30) assetsDocs += 1
-      cal.push(item({ title: r.title, module: r.module, date: day, sourceId: r.id, entryType: savedReminderKind(r.id, r.title) }))
+      cal.push(item({ title: r.title, module: r.module, date: day, sourceId: r.id, entryType: savedReminderKind(r.id, r.title), remindBeforeDays: Number(r.remindBeforeDays ?? 0) || 0 }))
     }
 
     // ---- التفويضات: انتهاؤها.
@@ -410,6 +463,7 @@ export function useMetrics(): { loading: boolean; metrics: Metrics } {
           sourceId: `delegation-${dlg.id}`,
           type: 'تفويض',
           isExpiry: true,
+          remindBeforeDays: 7,
         }),
       )
     }
@@ -429,6 +483,7 @@ export function useMetrics(): { loading: boolean; metrics: Metrics } {
           priority: r.priority || 'متوسطة',
           time: r.time ?? '',
           isUserCreated: true,
+          remindBeforeDays: Number(r.remindBeforeDays ?? 0) || 0,
         }),
       )
     }
@@ -608,7 +663,7 @@ export function useMetrics(): { loading: boolean; metrics: Metrics } {
       }
       const due = parseDay(e.due_date)
       if (due) {
-        cal.push(item({ title: name, module: 'الالتزامات المشتركة', date: due, sourceId: e.id, status: e.status, entryType: e.entry_type, to }))
+        cal.push(item({ title: name, module: 'الالتزامات المشتركة', date: due, sourceId: e.id, status: e.status, entryType: e.entry_type, remindBeforeDays: reminderDaysOf(d), to }))
       }
     }
 

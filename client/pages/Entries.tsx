@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Archive, Ban, CheckCircle2, ClipboardList, FileText, HandCoins, LayoutGrid, Pencil, Plus, Receipt, Trash2, TrendingUp, UserRound, UsersRound, type LucideIcon } from 'lucide-react'
+import { Archive, Ban, CheckCircle2, ClipboardList, FileText, HandCoins, LayoutGrid, Pencil, Plus, Receipt, RotateCcw, Trash2, TrendingUp, UserRound, UsersRound, type LucideIcon } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useI18n } from '@/lib/i18n'
 import { moduleHidden, useSession } from '@/lib/session'
@@ -13,7 +13,7 @@ import { FileButton } from '@/components/FileButton'
 import { SharedDetails } from '@/components/SharedDetails'
 import { PersonalEditor } from '@/components/PersonalEditor'
 import { Confirm } from '@/components/Confirm'
-import { archiveEntry, canEdit, paymentActions, remainingOf, trashEntry } from '@/lib/personalWrite'
+import { archiveEntry, canEdit, custodyNumber, FORMS, paymentActions, remainingOf, trashEntry } from '@/lib/personalWrite'
 import { publicName } from '@/lib/requestsWrite'
 import { IncreaseForm, PaymentForm } from '@/components/PaymentForm'
 import { CustodyPanel, SettleDialog } from '@/components/CustodyPanel'
@@ -113,6 +113,8 @@ function EntriesPage({
   const [adding, setAdding] = useState(false)
   const [sharedEditing, setSharedEditing] = useState<Entry | null>(null)
   const [editing, setEditing] = useState<Entry | null>(null)
+  // «بدء عهدة جديدة» / «بدء كورس جديد»: نموذج السجل نفسه، والحالي إلى السجل.
+  const [newCourse, setNewCourse] = useState(false)
   const [expenseFor, setExpenseFor] = useState<Entry | null>(null)
   const [notice, setNotice] = useState('')
   const flash = (message: string) => {
@@ -218,7 +220,14 @@ function EntriesPage({
             currency={currency}
             page={page}
             editable={page === 'personal' && canEdit(open, user?.id)}
-            onEdit={() => setEditing(open)}
+            onEdit={() => {
+              setNewCourse(false)
+              setEditing(open)
+            }}
+            onNewCourse={() => {
+              setNewCourse(true)
+              setEditing(open)
+            }}
             onAddExpense={() => setExpenseFor(open)}
             onEditShared={() => setSharedEditing(open)}
             onChanged={(message) => {
@@ -260,6 +269,7 @@ function EntriesPage({
         <PersonalEditor
           open={adding || !!editing}
           entry={editing ?? undefined}
+          newCourse={!!editing && newCourse}
           onClose={() => {
             setAdding(false)
             setEditing(null)
@@ -267,6 +277,7 @@ function EntriesPage({
           onSaved={(message) => {
             setAdding(false)
             setEditing(null)
+            if (newCourse) setParams({})
             flash(message)
           }}
         />
@@ -287,6 +298,8 @@ const LOGS = [
   'سجل التسويات',
   'مستندات',
   'مرفقات إضافية',
+  'سجل العهد السابقة',
+  'سجل الكورسات',
 ]
 // مفاتيح داخلية يحفظها التطبيق للمزامنة والمشاركة ولا يعرضها.
 const INTERNAL = /^(_|معرف المنشئ|قبول الأعضاء|وقت دعوة الأعضاء|مؤرشف عند|محذوف عند|سجل تاريخي عند|تقسيم الأعضاء|تواريخ الأعضاء|عهدة_)/
@@ -327,6 +340,7 @@ function EntryDetails({
   page,
   editable = false,
   onEdit,
+  onNewCourse,
   onAddExpense,
   onEditShared,
   onChanged,
@@ -338,6 +352,7 @@ function EntryDetails({
   page: string
   editable?: boolean
   onEdit?: () => void
+  onNewCourse?: () => void
   onAddExpense?: () => void
   onEditShared?: () => void
   onChanged?: (message: string) => void
@@ -381,6 +396,16 @@ function EntryDetails({
     }
   }
   const [action, setAction] = useState<'archive' | 'delete' | null>(null)
+  // الأدوية: كورس جديد بنفس البيانات. العهدة: عهدة جديدة — لصاحبها فقط.
+  const newCourseKind =
+    editable && FORMS[entry.entry_type]
+      ? entry.entry_type === 'أدوية'
+        ? 'course'
+        : isCustody && isOwnerView(entry.details ?? {}, me.fnd)
+          ? 'custody'
+          : null
+      : null
+  const [askNewCourse, setAskNewCourse] = useState(false)
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState('')
   async function runAction() {
@@ -461,6 +486,30 @@ function EntryDetails({
           )}
         </div>
       )}
+      {newCourseKind && (
+        <button
+          type="button"
+          onClick={() => setAskNewCourse(true)}
+          className="mt-2 flex h-11 w-full items-center justify-center gap-1.5 rounded-inner border border-hairline bg-white text-[13px] font-extrabold text-body hover:bg-surface"
+        >
+          <RotateCcw className="size-4" />
+          {t(newCourseKind === 'custody' ? 'بدء عهدة جديدة' : 'بدء كورس جديد')}
+        </button>
+      )}
+      <Confirm
+        open={askNewCourse}
+        title={newCourseKind === 'custody' ? 'بدء عهدة جديدة' : 'بدء كورس جديد'}
+        message={
+          newCourseKind === 'custody'
+            ? `${t('ستُفتح بيانات')} «${entry.title}» ${t('كما هي بتاريخ اليوم — غيّر ما تراه ثم احفظ. العهدة الحالية تُحفظ في السجل كعهدة رقم')} ${custodyNumber(entry.details)} ${t('بكل معلوماتها ومصروفاتها.')}`
+            : `${t('ستُفتح بيانات')} «${entry.title}» ${t('كما هي لتعدّل التاريخ؛ الكورس الحالي يُحفظ في السجل. هل تريد المتابعة؟')}`
+        }
+        onConfirm={() => {
+          setAskNewCourse(false)
+          onNewCourse?.()
+        }}
+        onCancel={() => setAskNewCourse(false)}
+      />
       {isMedicine && (
         <div className="mt-2 grid grid-cols-3 gap-2">
           {MEDICATION_ACTIONS.map((a) => (
@@ -685,7 +734,7 @@ function EntryDetails({
             <div key={i} className="card-inner px-3 py-2">
               {extraFile(row.extra) && <FileButton className="my-1" file={{ localPath: extraFile(row.extra) }} />}
               {Object.entries(row)
-                .filter(([k, v]) => !k.startsWith('_') && k !== 'extra' && v !== null && v !== '' && typeof v !== 'object')
+                .filter(([k, v]) => !k.startsWith('_') && k !== 'extra' && v !== null && v !== '' && typeof v !== 'object' && !/^[[{]/.test(String(v).trim()))
                 .map(([k, v]) =>
                   FILE_KEYS.has(k) ? (
                     <FileButton

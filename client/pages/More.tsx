@@ -7,6 +7,7 @@ import { useStore } from '@/lib/data'
 import { cn } from '@/lib/format'
 import { IconBadge, InfoRow, PageHeader, SectionTitle } from '@/components/ui'
 import { SITE, StoreLinks } from './Gates'
+import { NotificationsCard } from '@/components/Notifier'
 
 /** اختيار اللغة — اللغات الخمس نفسها في التطبيق. */
 export function LanguagePicker({ compact = false }: { compact?: boolean }) {
@@ -122,6 +123,9 @@ export default function More() {
       <SectionTitle>{t('اللغة')}</SectionTitle>
       <LanguagePicker />
 
+      <SectionTitle>{t('الإشعارات')}</SectionTitle>
+      <NotificationsCard />
+
       <SectionTitle>{t('روابط')}</SectionTitle>
       <div className="card divide-y divide-line overflow-hidden">
         {links.map((l) => (
@@ -136,7 +140,7 @@ export default function More() {
       <div className="card flex items-start gap-3 p-4">
         <Smartphone className="mt-0.5 size-5 text-brand" />
         <div className="flex-1 text-[13px] leading-relaxed text-sub">
-          {t('ما تفعله في الموقع يُحفظ في حسابك ويظهر في التطبيق. إنشاء الحساب واستعادة كلمة المرور والإشعارات من التطبيق.')}
+          {t('ما تفعله في الموقع يُحفظ في حسابك ويظهر في التطبيق.')}
           <StoreLinks className="mt-3" />
         </div>
       </div>

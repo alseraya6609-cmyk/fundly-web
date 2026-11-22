@@ -4,6 +4,7 @@ import { cn } from '@/lib/format'
 import { useI18n } from '@/lib/i18n'
 import { useSession } from '@/lib/session'
 import { useInbox } from '@/lib/data'
+import { Notifier } from './Notifier'
 
 type Item = { to: string; label: string; icon: LucideIcon; badge?: number }
 
@@ -31,6 +32,7 @@ export function AppShell() {
 
   return (
     <div className="min-h-screen bg-page lg:flex">
+      <Notifier />
       {/* الشريط الجانبي — الشاشات الكبيرة */}
       <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-e border-line bg-white px-4 py-6 lg:flex">
         <div className="mb-8 flex items-center gap-3 px-2">

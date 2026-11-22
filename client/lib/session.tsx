@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import type { User } from '@supabase/supabase-js'
 import { supabase, errorText } from './supabase'
 import { pingDevice } from './device'
+import { unregisterWebPush } from './webPush'
 
 /*
   الدخول وبوابات الحساب، بنفس منطق التطبيق ولوحة التحكم:
@@ -38,6 +39,7 @@ type Ctx = {
   policyAccepted: boolean
   hidden: Set<string>
   signIn: (identifier: string, password: string) => Promise<void>
+  adopt: (options?: { acceptPolicy?: boolean }) => Promise<void>
   signOut: () => Promise<void>
   acceptPolicy: () => Promise<void>
   refresh: () => Promise<void>
@@ -47,14 +49,14 @@ const SessionContext = createContext<Ctx | null>(null)
 
 export class SignInError extends Error {}
 
-function methodOf(input: string): 'email' | 'id' | 'phone' {
+export function methodOf(input: string): 'email' | 'id' | 'phone' {
   const text = input.trim().toUpperCase()
   if (text.includes('@')) return 'email'
   if (text.startsWith('FND')) return 'id'
   return 'phone'
 }
 
-async function emailFor(input: string): Promise<string> {
+export async function emailFor(input: string): Promise<string> {
   const method = methodOf(input)
   if (method === 'email') return input.trim().toLowerCase()
   const { data, error } = await supabase.rpc('fundly_login_email', { p_identifier: input.trim() })
@@ -172,7 +174,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     })
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_OUT') setUser(null)
-      if (event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') setUser(session?.user ?? null)
+      // لا يُعتمد دخول جديد من هنا (رمز الاستعادة/التفعيل): adopt يفحصه أولًا.
+      if (event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') setUser((prev) => (prev ? session?.user ?? null : prev))
     })
     return () => {
       alive = false
@@ -214,7 +217,35 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     [load],
   )
 
+  /** بعد إنشاء الحساب أو استعادة كلمة المرور: الجلسة الجديدة بنفس فحوص الدخول. */
+  const adopt = useCallback(
+    async (options?: { acceptPolicy?: boolean }) => {
+      const { data } = await supabase.auth.getUser()
+      const current = data.user
+      if (!current) throw new SignInError('سجّل الدخول من جديد')
+      const { data: admin } = await supabase.rpc('fundly_is_admin_account')
+      if (admin === true) {
+        await supabase.auth.signOut()
+        throw new SignInError('هذا الحساب مخصص للوحة التحكم ولا يُستخدم في التطبيق')
+      }
+      if (options?.acceptPolicy) {
+        // وافق على الشروط والخصوصية عند إنشاء الحساب: تُسجَّل للإصدار الحالي.
+        const cfg = await loadConfig()
+        if (cfg?.policy_version) {
+          await supabase
+            .rpc('fundly_accept_policy', { p_version: cfg.policy_version, p_platform: 'web', p_app_version: `web ${WEB_VERSION}` })
+            .then(() => undefined, () => undefined)
+        }
+      }
+      setUser(current)
+      await load(current)
+    },
+    [load],
+  )
+
   const signOut = useCallback(async () => {
+    // FundlyPush.unregister: قبل الخروج (الدالة تحتاج الحساب).
+    await unregisterWebPush()
     await supabase.auth.signOut()
     setUser(null)
     setProfile(null)
@@ -236,8 +267,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(() => load(user), [load, user])
 
   const value = useMemo<Ctx>(
-    () => ({ ready, user, profile, config, account, policyAccepted, hidden, signIn, signOut, acceptPolicy, refresh }),
-    [ready, user, profile, config, account, policyAccepted, hidden, signIn, signOut, acceptPolicy, refresh],
+    () => ({ ready, user, profile, config, account, policyAccepted, hidden, signIn, adopt, signOut, acceptPolicy, refresh }),
+    [ready, user, profile, config, account, policyAccepted, hidden, signIn, adopt, signOut, acceptPolicy, refresh],
   )
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>

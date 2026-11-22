@@ -1585,6 +1585,389 @@ export const FORMS: Record<string, EntryForm> = {
         "kind": "multiline"
       }
     ]
+  },
+  "الحسابات والبيانات": {
+    "label": "الحسابات والبيانات",
+    "subtitle": "كلمات المرور والحسابات المسجلة",
+    "fields": [
+      {
+        "label": "التصنيف / النوع",
+        "kind": "text",
+        "required": true,
+        "isPrimary": true
+      },
+      {
+        "label": "الاسم",
+        "kind": "text",
+        "required": true,
+        "isPrimary": true,
+        "isTitle": true
+      },
+      {
+        "label": "اسم المستخدم",
+        "kind": "text",
+        "isPrimary": true
+      },
+      {
+        "label": "كلمة المرور",
+        "kind": "secret",
+        "isPrimary": true
+      },
+      {
+        "label": "ملاحظات",
+        "kind": "multiline"
+      }
+    ]
+  },
+  "جمعية": {
+    "label": "جمعية",
+    "subtitle": "تنظيم الأدوار والمدفوعات",
+    "fields": [
+      {
+        "label": "اسم الجمعية",
+        "kind": "text",
+        "required": true,
+        "isPrimary": true,
+        "isTitle": true
+      },
+      {
+        "label": "قيمة الاشتراك",
+        "kind": "number",
+        "required": true,
+        "isPrimary": true,
+        "isAmount": true
+      },
+      {
+        "label": "تاريخ البداية",
+        "kind": "date",
+        "required": true,
+        "isPrimary": true
+      },
+      {
+        "label": "عدد الأعضاء",
+        "kind": "number",
+        "isPrimary": true
+      },
+      {
+        "label": "رقم الدور",
+        "kind": "number"
+      },
+      {
+        "label": "تاريخ الاستلام",
+        "kind": "date"
+      },
+      {
+        "label": "طريقة الدفع",
+        "kind": "text"
+      },
+      {
+        "label": "ملاحظات",
+        "kind": "multiline"
+      }
+    ]
+  },
+  "متابعة": {
+    "label": "متابعة",
+    "subtitle": "مهمة أو موعد يحتاج متابعة",
+    "fields": [
+      {
+        "label": "موضوع المتابعة",
+        "kind": "text",
+        "required": true,
+        "isPrimary": true,
+        "isTitle": true
+      },
+      {
+        "label": "تاريخ المتابعة",
+        "kind": "date",
+        "required": true,
+        "isPrimary": true
+      },
+      {
+        "label": "الحالة",
+        "kind": "text",
+        "isPrimary": true
+      },
+      {
+        "label": "الأولوية",
+        "kind": "text",
+        "isPrimary": true
+      },
+      {
+        "label": "المسؤول",
+        "kind": "text"
+      },
+      {
+        "label": "التذكير",
+        "kind": "text"
+      },
+      {
+        "label": "ملاحظات",
+        "kind": "multiline"
+      }
+    ]
+  },
+  "تسجيل / تخطيط": {
+    "label": "تسجيل / تخطيط",
+    "subtitle": "فكرة أو ملاحظة أو خطة مستقبلية",
+    "fields": [
+      {
+        "label": "العنوان",
+        "kind": "text",
+        "required": true,
+        "isPrimary": true,
+        "isTitle": true
+      },
+      {
+        "label": "النوع",
+        "kind": "text",
+        "required": true,
+        "isPrimary": true
+      },
+      {
+        "label": "التاريخ",
+        "kind": "date",
+        "isPrimary": true
+      },
+      {
+        "label": "الهدف",
+        "kind": "text"
+      },
+      {
+        "label": "التفاصيل",
+        "kind": "multiline"
+      },
+      {
+        "label": "التذكير",
+        "kind": "text"
+      }
+    ]
+  },
+  "كلمات السر": {
+    "label": "كلمات السر",
+    "subtitle": "بيانات دخول خاصة بالحساب",
+    "fields": [
+      {
+        "label": "اسم الحساب أو الخدمة",
+        "kind": "text",
+        "required": true,
+        "isPrimary": true,
+        "isTitle": true
+      },
+      {
+        "label": "اسم المستخدم",
+        "kind": "text",
+        "required": true,
+        "isPrimary": true
+      },
+      {
+        "label": "كلمة المرور",
+        "kind": "secret",
+        "required": true,
+        "isPrimary": true
+      },
+      {
+        "label": "رابط الموقع",
+        "kind": "text"
+      },
+      {
+        "label": "ملاحظات",
+        "kind": "multiline"
+      }
+    ]
+  },
+  "الإيميلات": {
+    "label": "الإيميلات",
+    "subtitle": "حساب بريد إلكتروني وبيانات الاسترداد",
+    "fields": [
+      {
+        "label": "اسم الحساب",
+        "kind": "text",
+        "required": true,
+        "isPrimary": true,
+        "isTitle": true
+      },
+      {
+        "label": "البريد الإلكتروني",
+        "kind": "text",
+        "required": true,
+        "isPrimary": true
+      },
+      {
+        "label": "كلمة المرور",
+        "kind": "secret",
+        "required": true,
+        "isPrimary": true
+      },
+      {
+        "label": "بريد الاسترداد",
+        "kind": "text"
+      },
+      {
+        "label": "رقم الهاتف",
+        "kind": "text"
+      },
+      {
+        "label": "ملاحظات",
+        "kind": "multiline"
+      }
+    ]
+  },
+  "الحسابات البنكية": {
+    "label": "الحسابات البنكية",
+    "subtitle": "بيانات الحساب والآيبان",
+    "fields": [
+      {
+        "label": "اسم البنك",
+        "kind": "text",
+        "required": true,
+        "isPrimary": true,
+        "isTitle": true
+      },
+      {
+        "label": "صاحب الحساب",
+        "kind": "text",
+        "required": true,
+        "isPrimary": true
+      },
+      {
+        "label": "رقم الحساب",
+        "kind": "secret",
+        "isPrimary": true
+      },
+      {
+        "label": "رقم الآيبان",
+        "kind": "secret",
+        "required": true,
+        "isPrimary": true
+      },
+      {
+        "label": "الفرع",
+        "kind": "text"
+      },
+      {
+        "label": "العملة",
+        "kind": "select",
+        "options": [
+          "جنيه سوداني",
+          "جنيه مصري",
+          "درهم",
+          "دولار",
+          "دينار أردني",
+          "دينار بحريني",
+          "دينار",
+          "روبية باكستانية",
+          "روبية هندية",
+          "ريال",
+          "ريال عماني",
+          "ريال قطري",
+          "ليرة سورية",
+          "ليرة لبنانية",
+          "يوان صيني",
+          "يورو"
+        ]
+      },
+      {
+        "label": "ملاحظات",
+        "kind": "multiline"
+      }
+    ]
+  },
+  "تجديد": {
+    "label": "تجديد",
+    "subtitle": "تذكير بتجديد إجراء أو وثيقة مرتبطة بهذا الالتزام",
+    "fields": [
+      {
+        "label": "عنوان التجديد",
+        "kind": "text",
+        "required": true,
+        "isPrimary": true,
+        "isTitle": true
+      },
+      {
+        "label": "تاريخ التجديد",
+        "kind": "date",
+        "required": true,
+        "isPrimary": true
+      },
+      {
+        "label": "التكرار",
+        "kind": "select",
+        "isPrimary": true,
+        "options": [
+          "بدون تكرار",
+          "شهري",
+          "كل 3 شهور",
+          "كل 6 شهور",
+          "سنوي"
+        ]
+      },
+      {
+        "label": "التذكيرات",
+        "kind": "select",
+        "allowCustom": true,
+        "options": [
+          "بدون تذكير",
+          "قبل يوم",
+          "قبل 3 أيام",
+          "قبل أسبوع",
+          "قبل 10 أيام",
+          "قبل أسبوعين",
+          "قبل شهر"
+        ]
+      },
+      {
+        "label": "ملاحظات",
+        "kind": "multiline"
+      }
+    ]
+  },
+  "تفويض": {
+    "label": "تفويض",
+    "subtitle": "صلاحية بلا مبلغ — للصرف افتح عهدة مالية",
+    "fields": [
+      {
+        "label": "التفويض صلاحية بلا مبلغ — للصرف افتح عهدة مالية",
+        "kind": "header"
+      },
+      {
+        "label": "اسم المفوَّض",
+        "kind": "text",
+        "required": true,
+        "isPrimary": true,
+        "isTitle": true
+      },
+      {
+        "label": "رقم الهاتف",
+        "kind": "text",
+        "isPrimary": true
+      },
+      {
+        "label": "نطاق التفويض",
+        "kind": "select",
+        "required": true,
+        "isPrimary": true,
+        "options": [
+          "كل المصروفات الشخصية",
+          "فئة محددة",
+          "التزام واحد فقط",
+          "مخصص"
+        ]
+      },
+      {
+        "label": "تاريخ بداية التفويض",
+        "kind": "date",
+        "isPrimary": true
+      },
+      {
+        "label": "تاريخ نهاية التفويض",
+        "kind": "date"
+      },
+      {
+        "label": "ملاحظات",
+        "kind": "multiline"
+      }
+    ]
   }
 }
 
