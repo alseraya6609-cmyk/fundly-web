@@ -25,6 +25,7 @@ import { PROPERTY_TYPE_KEY, archiveUnit, decodeUnits, toggleUnitFreeze, unitHasO
 import { LeaseForm, type Renewal } from '@/components/LeaseForm'
 import { CancelContractFlow, UnitLeaseBox, currentContract } from '@/components/UnitLease'
 import { contractClosed } from '@/lib/leaseActions'
+import { ActivityLeaseBox, activityPrefill } from '@/components/ActivityLease'
 import { ACTIVITY_TYPES } from '@/lib/lease'
 import { splitLogs as splitAssetLogs } from '@/lib/vehicleWrite'
 
@@ -67,6 +68,8 @@ export default function Assets() {
   const canAddProperty = groups.some((g) => g.key === 'real_estate')
   const canAddActivity = groups.some((g) => g.key === 'activity')
   const [addingActivity, setAddingActivity] = useState(false)
+  const [activityLease, setActivityLease] = useState<{ asset: Asset; renewal?: Renewal } | null>(null)
+  const activityClasses = ACTIVITY_TYPES.filter((x) => !hidden.has(`item:assets:الأنشطة التجارية:${x}`))
   const [addingProperty, setAddingProperty] = useState(false)
   const [editing, setEditing] = useState<{ asset: Asset; type?: string; focusKey?: string } | null>(null)
 
@@ -198,6 +201,15 @@ export default function Assets() {
                 ))}
             </div>
             <AssetUnits asset={open} onEditUnit={(type, focusKey) => setEditing({ asset: open, type, focusKey })} onDone={flash} />
+            {assetGroup(open.category) === 'activity' && (
+              <ActivityLeaseBox
+                asset={open}
+                editable={!isCancelledAsset(open) && open.status !== ARCHIVED}
+                onLease={() => setActivityLease({ asset: open })}
+                onRenew={(_, renewal) => setActivityLease({ asset: open, renewal })}
+                onDone={flash}
+              />
+            )}
             <AssetContracts asset={open} />
             <AssetRecords asset={open} onChanged={(m) => (setParams({}), flash(m))} />
             <p className="mt-5 rounded-inner bg-surface px-4 py-3 text-[12px] text-sub">
@@ -205,8 +217,8 @@ export default function Assets() {
                 assetGroup(open.category) === 'equipment'
                   ? 'عقود تأجير المركبة والتفويض من التطبيق حاليًا.'
                   : open.category === 'real_estate'
-                    ? 'عقود إيجار الوحدات من التطبيق حاليًا.'
-                    : 'تعديل بيانات العقار والنشاط ووحداته وعقوده من التطبيق حاليًا.',
+                    ? 'نموذج العقد الرسمي PDF من التطبيق حاليًا.'
+                    : 'تعديل بيانات النشاط وفروعه وموظفيه من التطبيق حاليًا.',
               )}
             </p>
           </div>
@@ -215,11 +227,24 @@ export default function Assets() {
       {addingActivity && (
         <LeaseForm
           propertyType=""
-          activity={{ classOptions: ACTIVITY_TYPES.filter((x) => !hidden.has(`item:assets:الأنشطة التجارية:${x}`)) }}
+          activity={{ classOptions: activityClasses }}
           onClose={() => setAddingActivity(false)}
           onDone={(m) => {
             setAddingActivity(false)
             setFilter('activity')
+            flash(m)
+          }}
+        />
+      )}
+      {activityLease && (
+        <LeaseForm
+          asset={activityLease.asset}
+          propertyType=""
+          renewal={activityLease.renewal}
+          activity={{ classOptions: activityClasses, prefill: activityLease.renewal ? undefined : activityPrefill(activityLease.asset) }}
+          onClose={() => setActivityLease(null)}
+          onDone={(m) => {
+            setActivityLease(null)
             flash(m)
           }}
         />

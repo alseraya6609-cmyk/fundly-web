@@ -158,62 +158,7 @@ export function UnitLeaseBox({
             )}
           </div>
 
-          <div className="mt-3 rounded-inner border border-line p-3">
-            <p className="mb-2 text-[13px] font-extrabold text-title">{t('الدفعات الإيجارية + الدفعات الإدارية + التأمين')}</p>
-            {payments.length === 0 ? (
-              <p className="text-[12px] leading-relaxed text-sub">{t('لا توجد دفعات بعد — تُولَّد من دفعات عقد الإيجار ورسومه وتأمينه عند حفظه، أو أضفها يدويًا.')}</p>
-            ) : (
-              <>
-                <p className="mb-2 flex items-center justify-between rounded-inner bg-brand-soft px-3 py-2 text-[12.5px] font-extrabold text-brand">
-                  <span>
-                    {t('إجمالي الدفعات')} {money(totals.grand, t(currency))}
-                  </span>
-                  <span className="rounded-full bg-white px-2 text-[11px] text-sub">{payments.length}</span>
-                </p>
-                <div className="grid grid-cols-2 gap-2">
-                  {tile('الدفعات المستحقة', totals.dueToday, `${totals.dueTodayCount} ${t('بند')}`)}
-                  {tile('الدفعات المتأخرة', totals.overdue, `${totals.overdueCount} ${t('بند')}`)}
-                  {tile('الدفعات القادمة', totals.upcoming, `${totals.upcomingCount} ${t('بند')}`)}
-                  {tile('الدفعات المستلمة', totals.received, `${totals.receivedCount} ${t('بند')}`)}
-                </div>
-                <p className="mt-2 text-[12px] font-bold text-sub">{totals.nextDue ? `${t('أقرب استحقاق:')} ${pretty(totals.nextDue)}` : t('أقرب استحقاق: لا يوجد')}</p>
-                <div className="mt-2 flex flex-col divide-y divide-line">
-                  {payments.map((p) => {
-                    const left = (Number(p.amount_due) || 0) - (Number(p.amount_paid) || 0)
-                    return (
-                      <div key={p.id} className="flex flex-wrap items-center gap-2 py-2 text-[12px]">
-                        <div className="min-w-0 flex-1">
-                          <p dir="auto" className="font-extrabold text-title">
-                            {t(payNameOf(p))}
-                          </p>
-                          <p className="text-[11px] text-muted">
-                            {p.due_date ? pretty(p.due_date) : t('بلا تاريخ')} · {money(p.amount_due, t(currency))}
-                          </p>
-                        </div>
-                        <span className={cn('font-bold', left > 0.009 ? 'text-gold-dark' : 'text-brand')}>{left > 0.009 ? `${t('المتبقي')}: ${money(left)}` : t('مسددة')}</span>
-                        {editable && left > 0.009 && contract.status !== 'cancelled' && (
-                          <button type="button" onClick={() => setPaying(p)} className="h-7 rounded-inner bg-brand px-2.5 text-[11.5px] font-extrabold text-white hover:bg-brand-dark">
-                            {t('تسجيل السداد')}
-                          </button>
-                        )}
-                        {editable && (
-                          <button type="button" aria-label={t('تعديل')} onClick={() => setEditingPay({ existing: p })} className="text-brand">
-                            <Pencil className="size-4" />
-                          </button>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              </>
-            )}
-            {editable && contract.status !== 'cancelled' && (
-              <button type="button" onClick={() => setEditingPay({ existing: null })} className="mt-3 flex h-11 w-full items-center justify-center gap-1.5 rounded-field border border-dashed border-brand text-[13px] font-extrabold text-brand hover:bg-brand-soft">
-                <Plus className="size-4" />
-                {t('إضافة دفعة')}
-              </button>
-            )}
-          </div>
+          <DuesBox payments={payments} editable={editable} open={contract.status !== 'cancelled'} canAdd onPay={setPaying} onEdit={(p) => setEditingPay({ existing: p })} />
         </>
       )}
 
@@ -299,7 +244,7 @@ export function UnitLeaseBox({
 
 const isoOf = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
-function ActionTile({ icon: Icon, label, danger = false, onClick }: { icon: typeof Plus; label: string; danger?: boolean; onClick: () => void }) {
+export function ActionTile({ icon: Icon, label, danger = false, onClick }: { icon: typeof Plus; label: string; danger?: boolean; onClick: () => void }) {
   const { t } = useI18n()
   return (
     <button type="button" onClick={onClick} className={cn('flex flex-col items-center justify-center gap-1 rounded-inner border border-line bg-white px-2 py-3 text-[12.5px] font-extrabold hover:border-brand', danger ? 'text-danger' : 'text-brand')}>
@@ -310,21 +255,21 @@ function ActionTile({ icon: Icon, label, danger = false, onClick }: { icon: type
 }
 
 /** _pickContractMonths: 6 أشهر / سنة / سنتان. */
-function MonthsSheet({ title, hint, confirmLabel, onClose, onPick }: { title: string; hint: string; confirmLabel: string; onClose: () => void; onPick: (months: number) => void }) {
+const RENEW_MONTHS: [string, number][] = [
+  ['6 أشهر', 6],
+  ['سنة', 12],
+  ['سنتان', 24],
+]
+
+export function MonthsSheet({ title, hint, confirmLabel, options = RENEW_MONTHS, onClose, onPick }: { title: string; hint: string; confirmLabel: string; options?: [string, number][]; onClose: () => void; onPick: (months: number) => void }) {
   const { t } = useI18n()
   const [months, setMonths] = useState(12)
   return (
     <Sheet open onClose={onClose}>
       <p className="text-[17px] font-extrabold text-title">{t(title)}</p>
       <p className="mt-1 text-[12.5px] leading-relaxed text-sub">{hint}</p>
-      <div className="mt-4 grid grid-cols-3 gap-2">
-        {(
-          [
-            ['6 أشهر', 6],
-            ['سنة', 12],
-            ['سنتان', 24],
-          ] as [string, number][]
-        ).map(([label, n]) => (
+      <div className={cn('mt-4 grid gap-2', options.length > 3 ? 'grid-cols-5' : 'grid-cols-3')}>
+        {options.map(([label, n]) => (
           <button key={n} type="button" onClick={() => setMonths(n)} className={cn('h-11 rounded-field border text-[13px] font-extrabold', months === n ? 'border-brand bg-brand text-white' : 'border-line bg-field text-title')}>
             {t(label)}
           </button>
@@ -338,7 +283,7 @@ function MonthsSheet({ title, hint, confirmLabel, onClose, onPick }: { title: st
 }
 
 /** _pickExtension ← _confirmExtension ← _extendContract */
-function ExtendFlow({ contract, onClose, onDone }: { contract: UnitContract; onClose: () => void; onDone: (end: Date) => void }) {
+export function ExtendFlow({ contract, onClose, onDone }: { contract: UnitContract; onClose: () => void; onDone: (end: Date) => void }) {
   const { t } = useI18n()
   const [custom, setCustom] = useState<'h' | 'd' | 'm' | null>(null)
   const [count, setCount] = useState('')
@@ -594,5 +539,77 @@ function PaymentForm({ contractId, existing, onClose, onDone }: { contractId: st
         {t(existing ? 'حفظ التعديل' : 'حفظ الدفعة')}
       </button>
     </Sheet>
+  )
+}
+
+/** صندوق الدفعات الإيجارية والإدارية والتأمين (_duesSummaryBody / _sharedDuesBox). */
+export function DuesBox({ payments, editable, open, canAdd, onPay, onEdit }: { payments: UnitPayment[]; editable: boolean; open: boolean; canAdd: boolean; onPay: (p: UnitPayment) => void; onEdit?: (p: UnitPayment | null) => void }) {
+  const { t } = useI18n()
+  const currency = useCurrency()
+  const totals = dueTotals(payments)
+  const tile = (label: string, value: number, sub: string) => (
+    <div className="rounded-inner bg-surface px-3 py-2">
+      <p className="text-[11px] font-bold text-muted">{t(label)}</p>
+      <p className="text-[14px] font-extrabold text-title">{money(value, t(currency))}</p>
+      <p className="text-[10.5px] text-sub">{sub}</p>
+    </div>
+  )
+  return (
+    <div className="mt-3 rounded-inner border border-line p-3">
+      <p className="mb-2 text-[13px] font-extrabold text-title">{t('الدفعات الإيجارية + الدفعات الإدارية + التأمين')}</p>
+      {payments.length === 0 ? (
+        <p className="text-[12px] leading-relaxed text-sub">{t(canAdd ? 'لا توجد دفعات بعد — تُولَّد من دفعات عقد الإيجار ورسومه وتأمينه عند حفظه، أو أضفها يدويًا.' : 'لا توجد دفعات بعد.')}</p>
+      ) : (
+        <>
+          <p className="mb-2 flex items-center justify-between rounded-inner bg-brand-soft px-3 py-2 text-[12.5px] font-extrabold text-brand">
+            <span>
+              {t('إجمالي الدفعات')} {money(totals.grand, t(currency))}
+            </span>
+            <span className="rounded-full bg-white px-2 text-[11px] text-sub">{payments.length}</span>
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            {tile('الدفعات المستحقة', totals.dueToday, `${totals.dueTodayCount} ${t('بند')}`)}
+            {tile('الدفعات المتأخرة', totals.overdue, `${totals.overdueCount} ${t('بند')}`)}
+            {tile('الدفعات القادمة', totals.upcoming, `${totals.upcomingCount} ${t('بند')}`)}
+            {tile('الدفعات المستلمة', totals.received, `${totals.receivedCount} ${t('بند')}`)}
+          </div>
+          <p className="mt-2 text-[12px] font-bold text-sub">{totals.nextDue ? `${t('أقرب استحقاق:')} ${pretty(totals.nextDue)}` : t('أقرب استحقاق: لا يوجد')}</p>
+          <div className="mt-2 flex flex-col divide-y divide-line">
+            {payments.map((p) => {
+              const left = (Number(p.amount_due) || 0) - (Number(p.amount_paid) || 0)
+              return (
+                <div key={p.id} className="flex flex-wrap items-center gap-2 py-2 text-[12px]">
+                  <div className="min-w-0 flex-1">
+                    <p dir="auto" className="font-extrabold text-title">
+                      {t(payNameOf(p))}
+                    </p>
+                    <p className="text-[11px] text-muted">
+                      {p.due_date ? pretty(p.due_date) : t('بلا تاريخ')} · {money(p.amount_due, t(currency))}
+                    </p>
+                  </div>
+                  <span className={cn('font-bold', left > 0.009 ? 'text-gold-dark' : 'text-brand')}>{left > 0.009 ? `${t('المتبقي')}: ${money(left)}` : t('مسددة')}</span>
+                  {editable && left > 0.009 && open && (
+                    <button type="button" onClick={() => onPay(p)} className="h-7 rounded-inner bg-brand px-2.5 text-[11.5px] font-extrabold text-white hover:bg-brand-dark">
+                      {t('تسجيل السداد')}
+                    </button>
+                  )}
+                  {editable && onEdit && (
+                    <button type="button" aria-label={t('تعديل')} onClick={() => onEdit(p)} className="text-brand">
+                      <Pencil className="size-4" />
+                    </button>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </>
+      )}
+      {editable && canAdd && open && onEdit && (
+        <button type="button" onClick={() => onEdit(null)} className="mt-3 flex h-11 w-full items-center justify-center gap-1.5 rounded-field border border-dashed border-brand text-[13px] font-extrabold text-brand hover:bg-brand-soft">
+          <Plus className="size-4" />
+          {t('إضافة دفعة')}
+        </button>
+      )}
+    </div>
   )
 }

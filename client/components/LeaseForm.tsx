@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Calculator, CheckSquare, Edit3, FileText, Landmark, Loader2, Pencil, Plus, Shield, Square, Trash2, User, Users, Wand2, X } from 'lucide-react'
+import { Printer, Calculator, CheckSquare, Edit3, FileText, Landmark, Loader2, Pencil, Plus, Shield, Square, Trash2, User, Users, Wand2, X } from 'lucide-react'
 import { cn } from '@/lib/format'
 import { useI18n } from '@/lib/i18n'
 import { useCurrency, usePeopleAll, useStore, useUnitContracts, type Asset, type UnitContract } from '@/lib/data'
 import { ACTIVITY_UNIT_KEY, activityMetaFromLease, activityReminders, createActivityAsset, mergeActivityMeta } from '@/lib/activityWrite'
-import { errorText } from '@/lib/supabase'
+import { errorText, supabase } from '@/lib/supabase'
 import { AssetError } from '@/lib/assetWrite'
 import { splitLogs } from '@/lib/vehicleWrite'
 import { AREA_UNIT_KEY, INNER_FACILITIES_KEY, METER_FIELDS, setUnitStatus, setUnitsStatus, unitKey, type PropertyUnit } from '@/lib/propertyWrite'
@@ -101,7 +101,8 @@ function leaseMetaOf(asset: Asset, unit: PropertyUnit): Row {
   return meta
 }
 
-export type Renewal = { notes: string | null; start: Date; end: Date; oldNo: string }
+/** expireId: عقد النشاط السابق يصبح «منتهيًا» بعد حفظ التجديد (_openActivityLease). */
+export type Renewal = { notes: string | null; start: Date; end: Date; oldNo: string; expireId?: string }
 
 type Mode = { multi?: { key: string; name: string }[]; activity?: { prefill?: string } }
 
@@ -591,6 +592,9 @@ export function LeaseForm({
         multi: isMulti ? chosenList : undefined,
         peopleSource: activity ? `عقد إيجار النشاط — ${subjectName}` : undefined,
       })
+      if (renewal?.expireId && renewal.expireId !== saved.id) {
+        await supabase.from('property_unit_contracts').update({ status: 'expired' }).eq('id', renewal.expireId)
+      }
       if (activity) {
         const leaseMeta = activityMetaFromLease(l)
         await activityReminders(assetId!, createdTitle || asset?.title || subjectName, leaseMeta)
@@ -629,7 +633,10 @@ export function LeaseForm({
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-brand-deep/40 sm:items-center sm:p-4">
       <div role="dialog" aria-modal="true" className="flex h-[96vh] w-full flex-col overflow-hidden rounded-t-card bg-page shadow-2xl sm:h-[92vh] sm:max-w-3xl sm:rounded-card">
         <div className="flex items-center justify-between gap-2 border-b border-line bg-white px-4 py-3">
-          <p className="text-[17px] font-extrabold text-title">{t(title)}</p>
+          <p className="min-w-0 flex-1 text-[17px] font-extrabold text-title">{t(title)}</p>
+          <button type="button" onClick={() => printText(t(title), shareText(lease))} aria-label={t('طباعة العقد')} title={t('طباعة العقد')} className="grid size-9 place-items-center rounded-full bg-surface text-brand">
+            <Printer className="size-4" />
+          </button>
           <button type="button" onClick={onClose} aria-label={t('إغلاق')} className="grid size-9 place-items-center rounded-full bg-surface text-body">
             <X className="size-4" />
           </button>
@@ -1223,4 +1230,24 @@ function SignatureChoice({ store, onClose, onPick }: { store: Record<string, unk
       </button>
     </Sheet>
   )
+}
+
+/** طباعة نص العقد على A4 (أو حفظه PDF من المتصفح). */
+export function printText(title: string, text: string) {
+  const frame = document.createElement('iframe')
+  frame.style.position = 'fixed'
+  frame.style.width = '0'
+  frame.style.height = '0'
+  frame.style.border = '0'
+  document.body.appendChild(frame)
+  const doc = frame.contentDocument!
+  const esc = (v: string) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  doc.open()
+  doc.write(`<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><title>${esc(title)}</title><style>@page{size:A4;margin:16mm}body{font-family:Cairo,Tahoma,sans-serif;font-size:12.5px;line-height:1.9;color:#0F1F1C;white-space:pre-wrap}</style></head><body>${esc(text)}</body></html>`)
+  doc.close()
+  window.setTimeout(() => {
+    frame.contentWindow?.focus()
+    frame.contentWindow?.print()
+    window.setTimeout(() => frame.remove(), 1000)
+  }, 300)
 }
