@@ -1,8 +1,12 @@
 import { useMemo, useState } from 'react'
-import { Archive as ArchiveIcon, Building2, FileDown, LayoutGrid, UserRound, Users, UsersRound, type LucideIcon } from 'lucide-react'
+import { Archive as ArchiveIcon, ArchiveRestore, Building2, CheckCircle2, FileDown, LayoutGrid, UserRound, Users, UsersRound, type LucideIcon } from 'lucide-react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useI18n } from '@/lib/i18n'
 import { useSession } from '@/lib/session'
-import { ARCHIVED, assetUnits, hasMine, personArchived, useAssets, usePeopleAll, usePersonalAll, useSharedAll, useStore } from '@/lib/data'
+import { ARCHIVED, assetUnits, hasMine, personArchived, useAssets, usePeopleAll, usePersonalAll, useSharedAll, useStore, type Entry } from '@/lib/data'
+import { canEdit, unarchiveEntry } from '@/lib/personalWrite'
+import { errorText } from '@/lib/supabase'
+import { Confirm } from '@/components/Confirm'
 import { date, matches } from '@/lib/format'
 import { Chip, Empty, IconBadge, Loading, PageHeader, SearchField, SectionTitle } from '@/components/ui'
 import { ReportPreview } from '@/components/ReportPreview'
@@ -14,7 +18,7 @@ import { useReportSettings, type ReportDocument, type SummaryItem } from '@/lib/
   ووحدات العقارات المؤرشفة. للعرض فقط؛ إلغاء الأرشفة من التطبيق.
 */
 
-type Row = { key: string; source: string; title: string; subtitle: string }
+type Row = { key: string; source: string; title: string; subtitle: string; entry?: Entry }
 
 const SOURCES: { key: string; icon: LucideIcon; color: string }[] = [
   { key: 'الالتزامات الشخصية', icon: UserRound, color: '#0A5A50' },
@@ -25,7 +29,12 @@ const SOURCES: { key: string; icon: LucideIcon; color: string }[] = [
 
 export default function Archive() {
   const { t } = useI18n()
-  const { profile } = useSession()
+  const { profile, user } = useSession()
+  const qc = useQueryClient()
+  const [restoring, setRestoring] = useState<Entry | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [restoreError, setRestoreError] = useState('')
+  const [notice, setNotice] = useState('')
   const fnd = profile?.fnd_id ?? ''
   const personal = usePersonalAll()
   const shared = useSharedAll()
@@ -44,7 +53,7 @@ export default function Archive() {
     const join = (...parts: unknown[]) => parts.map((p) => String(p ?? '').trim()).filter(Boolean).join(' · ')
     for (const e of personal.data ?? []) {
       if (e.status !== ARCHIVED) continue
-      out.push({ key: `p${e.id}`, source: 'الالتزامات الشخصية', title: e.title, subtitle: join(t(e.entry_type), Number(e.amount) > 0 ? e.amount : '', date(e.due_date)) })
+      out.push({ key: `p${e.id}`, source: 'الالتزامات الشخصية', title: e.title, subtitle: join(t(e.entry_type), Number(e.amount) > 0 ? e.amount : '', date(e.due_date)), entry: e })
     }
     // المكتمل يبقى في الأرشيف حتى يُعرض في التطبيق ويُعاد (shared_completed_shown_v1).
     const shownRaw = store.data?.['shared_completed_shown_v1']
@@ -121,6 +130,12 @@ export default function Archive() {
           return <Chip key={s.key} active={source === s.key} label={s.key} icon={s.icon} count={n} onClick={() => setSource(s.key)} />
         })}
       </div>
+      {notice && (
+        <p className="mt-4 flex items-center gap-2 rounded-inner bg-brand-soft px-4 py-3 text-[13px] font-bold text-brand">
+          <CheckCircle2 className="size-4" />
+          {t(notice)}
+        </p>
+      )}
       <div className="flex items-end justify-between gap-2">
         <SectionTitle count={list.length}>{t('العناصر المؤرشفة')}</SectionTitle>
         {!loading && list.length > 0 && (
@@ -159,14 +174,52 @@ export default function Archive() {
                       </p>
                     )}
                   </div>
+                  {r.entry && canEdit(r.entry, user?.id) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRestoreError('')
+                        setRestoring(r.entry!)
+                      }}
+                      className="flex h-10 shrink-0 items-center gap-1.5 rounded-inner border border-line bg-white px-3 text-[12px] font-extrabold text-brand hover:bg-brand-soft"
+                    >
+                      <ArchiveRestore className="size-4" />
+                      <span className="hidden sm:inline">{t('إخراج من الأرشيف')}</span>
+                    </button>
+                  )}
                 </div>
               )
             })}
           </div>
-          <p className="mt-5 rounded-inner bg-surface px-4 py-3 text-[12px] text-sub">{t('لإلغاء الأرشفة افتح التطبيق.')}</p>
+          <p className="mt-5 rounded-inner bg-surface px-4 py-3 text-[12px] text-sub">{t('الالتزامات الشخصية تُخرج من الأرشيف هنا، وبقية الأقسام من التطبيق.')}</p>
         </>
       )}
       <ReportPreview doc={preview} onClose={() => setPreview(null)} />
+      <Confirm
+        open={!!restoring}
+        title="إخراج من الأرشيف"
+        message={`«${restoring?.title ?? ''}» — ${t('سيعود إلى الالتزامات النشطة. هل تريد المتابعة؟')}`}
+        confirmLabel="إخراج من الأرشيف"
+        busy={busy}
+        error={restoreError}
+        onConfirm={async () => {
+          if (!restoring) return
+          setBusy(true)
+          setRestoreError('')
+          try {
+            await unarchiveEntry(restoring)
+            await qc.invalidateQueries({ queryKey: ['personal'] })
+            setRestoring(null)
+            setNotice('تم إخراج الالتزام من الأرشيف بنجاح')
+            window.setTimeout(() => setNotice(''), 4000)
+          } catch (e) {
+            setRestoreError(errorText(e) || 'تعذّر الحفظ. تحقّق من الإنترنت ثم حاول مجددًا.')
+          } finally {
+            setBusy(false)
+          }
+        }}
+        onCancel={() => setRestoring(null)}
+      />
     </div>
   )
 }

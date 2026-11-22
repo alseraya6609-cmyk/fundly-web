@@ -133,7 +133,7 @@ export default function More() {
       <div className="card flex items-start gap-3 p-4">
         <Smartphone className="mt-0.5 size-5 text-brand" />
         <div className="flex-1 text-[13px] leading-relaxed text-sub">
-          {t('الإضافة والتعديل والطلبات والإشعارات من التطبيق. الموقع يعرض بياناتك في هذه المرحلة.')}
+          {t('الإضافة والتعديل في «أنا» متاحة في الموقع، وبقية الأقسام والطلبات والإشعارات من التطبيق.')}
           <StoreLinks className="mt-3" />
         </div>
       </div>

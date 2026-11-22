@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { User } from '@supabase/supabase-js'
 import { supabase, errorText } from './supabase'
+import { pingDevice } from './device'
 
 /*
   الدخول وبوابات الحساب، بنفس منطق التطبيق ولوحة التحكم:
@@ -178,6 +179,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       sub.subscription.unsubscribe()
     }
   }, [load])
+
+  // جلسة الموقع في «التثبيت والأجهزة» بلوحة التحكم: عند الدخول وعند الرجوع للموقع.
+  useEffect(() => {
+    const id = user?.id
+    if (!id) return
+    pingDevice(id, WEB_VERSION)
+    const onVisible = () => document.visibilityState === 'visible' && pingDevice(id, WEB_VERSION)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [user?.id])
 
   const signIn = useCallback(
     async (identifier: string, password: string) => {

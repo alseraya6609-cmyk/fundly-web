@@ -1,6 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { ClipboardList, LayoutGrid, UserRound, UsersRound, type LucideIcon } from 'lucide-react'
+import { Archive, CheckCircle2, ClipboardList, LayoutGrid, Pencil, Plus, Trash2, UserRound, UsersRound, type LucideIcon } from 'lucide-react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useI18n } from '@/lib/i18n'
 import { moduleHidden, useSession } from '@/lib/session'
 import { currencyOf, custodyRole, useCommitmentExtras, useCurrency, usePersonal, useShared, type Entry } from '@/lib/data'
@@ -10,6 +11,10 @@ import { Chip, Empty, ErrorBox, InfoRow, Loading, PageHeader, SearchField, Secti
 import { EntryCard } from '@/components/EntryCard'
 import { FileButton } from '@/components/FileButton'
 import { SharedDetails } from '@/components/SharedDetails'
+import { PersonalEditor } from '@/components/PersonalEditor'
+import { Confirm } from '@/components/Confirm'
+import { archiveEntry, canEdit, trashEntry } from '@/lib/personalWrite'
+import { errorText } from '@/lib/supabase'
 
 type Group = { key: string; label: string; icon: LucideIcon }
 
@@ -76,7 +81,7 @@ function EntriesPage({
   adminTitle: (g: Group) => string
 }) {
   const { t } = useI18n()
-  const { hidden, profile } = useSession()
+  const { hidden, profile, user } = useSession()
   const fnd = profile?.fnd_id ?? ''
   // سجل لم أنشئه: التزام مشترك دُعيت إليه، أو عهدة/دين أُسند إليّ.
   const badgeOf = (e: Entry) => {
@@ -90,6 +95,14 @@ function EntriesPage({
   const [params, setParams] = useSearchParams()
   const [filter, setFilter] = useState('all')
   const [search, setSearch] = useState('')
+  // الإضافة والتعديل في «أنا» فقط (المشتركة من التطبيق حاليًا).
+  const [adding, setAdding] = useState(false)
+  const [editing, setEditing] = useState<Entry | null>(null)
+  const [notice, setNotice] = useState('')
+  const flash = (message: string) => {
+    setNotice(message)
+    window.setTimeout(() => setNotice(''), 4000)
+  }
 
   // الفئات التي أخفتها الإدارة من لوحة التحكم لا تظهر (category:page:الفئة).
   const visibleGroups = groups.filter((g) => !hidden.has(`category:${page}:${adminTitle(g)}`))
@@ -115,7 +128,27 @@ function EntriesPage({
   return (
     <div>
       <PageHeader icon={icon} color={color} title={title} subtitle={subtitle} />
-      <SearchField value={search} onChange={setSearch} placeholder="بحث" />
+      {notice && (
+        <p className="mb-3 flex items-center gap-2 rounded-inner bg-brand-soft px-4 py-3 text-[13px] font-bold text-brand">
+          <CheckCircle2 className="size-4" />
+          {t(notice)}
+        </p>
+      )}
+      <div className="flex gap-2">
+        <div className="min-w-0 flex-1">
+          <SearchField value={search} onChange={setSearch} placeholder="بحث" />
+        </div>
+        {page === 'personal' && (
+          <button
+            type="button"
+            onClick={() => setAdding(true)}
+            className="flex h-14 shrink-0 items-center gap-2 rounded-field bg-brand px-4 text-[14px] font-extrabold text-white hover:bg-brand-dark"
+          >
+            <Plus className="size-5" />
+            <span className="hidden sm:inline">{t('إضافة')}</span>
+          </button>
+        )}
+      </div>
 
       <SectionTitle>{t('الفئات')}</SectionTitle>
       <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:px-0">
@@ -156,8 +189,37 @@ function EntriesPage({
       )}
 
       <Sheet open={!!open} onClose={() => setParams({})}>
-        {open && <EntryDetails entry={open} color={color} typeLabel={typeLabel(open)} currency={currency} page={page} />}
+        {open && (
+          <EntryDetails
+            entry={open}
+            color={color}
+            typeLabel={typeLabel(open)}
+            currency={currency}
+            page={page}
+            editable={page === 'personal' && canEdit(open, user?.id)}
+            onEdit={() => setEditing(open)}
+            onChanged={(message) => {
+              setParams({})
+              flash(message)
+            }}
+          />
+        )}
       </Sheet>
+      {page === 'personal' && (
+        <PersonalEditor
+          open={adding || !!editing}
+          entry={editing ?? undefined}
+          onClose={() => {
+            setAdding(false)
+            setEditing(null)
+          }}
+          onSaved={(message) => {
+            setAdding(false)
+            setEditing(null)
+            flash(message)
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -212,14 +274,40 @@ function EntryDetails({
   typeLabel,
   currency,
   page,
+  editable = false,
+  onEdit,
+  onChanged,
 }: {
   entry: Entry
   color: string
   typeLabel: string
   currency: string
   page: string
+  editable?: boolean
+  onEdit?: () => void
+  onChanged?: (message: string) => void
 }) {
   const { t } = useI18n()
+  const qc = useQueryClient()
+  const [action, setAction] = useState<'archive' | 'delete' | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [actionError, setActionError] = useState('')
+  async function runAction() {
+    if (!action) return
+    setBusy(true)
+    setActionError('')
+    try {
+      if (action === 'archive') await archiveEntry(entry)
+      else await trashEntry(entry)
+      await qc.invalidateQueries({ queryKey: ['personal'] })
+      setAction(null)
+      onChanged?.(action === 'archive' ? 'تمت أرشفة الالتزام بنجاح' : 'نُقل الالتزام إلى سلة المحذوفات')
+    } catch (e) {
+      setActionError(errorText(e) || 'تعذّر الحفظ. تحقّق من الإنترنت ثم حاول مجددًا.')
+    } finally {
+      setBusy(false)
+    }
+  }
   const extrasQ = useCommitmentExtras(page === 'personal' ? entry.id : undefined)
   const bucket = page === 'personal' ? 'personal-entry-attachments' : 'shared-entry-attachments'
   const fields = Object.entries(entry.details ?? {})
@@ -242,6 +330,40 @@ function EntryDetails({
         {entry.title}
       </h2>
       {entry.attachment_url && <FileButton className="mt-3" file={{ bucket, path: entry.attachment_url }} label="فتح المرفق" />}
+      {editable && (
+        <div className="mt-4 grid grid-cols-3 gap-2">
+          <button type="button" onClick={onEdit} className="flex h-11 items-center justify-center gap-1.5 rounded-inner bg-brand text-[13px] font-extrabold text-white hover:bg-brand-dark">
+            <Pencil className="size-4" />
+            {t('تعديل')}
+          </button>
+          <button type="button" onClick={() => setAction('archive')} className="flex h-11 items-center justify-center gap-1.5 rounded-inner bg-surface text-[13px] font-extrabold text-body hover:bg-line">
+            <Archive className="size-4" />
+            {t('أرشفة')}
+          </button>
+          <button type="button" onClick={() => setAction('delete')} className="flex h-11 items-center justify-center gap-1.5 rounded-inner bg-danger-soft text-[13px] font-extrabold text-danger hover:bg-danger/15">
+            <Trash2 className="size-4" />
+            {t('حذف')}
+          </button>
+        </div>
+      )}
+      <Confirm
+        open={!!action}
+        title={action === 'archive' ? 'أرشفة الالتزام' : 'حذف الالتزام'}
+        message={`«${entry.title}» — ${t(
+          action === 'archive'
+            ? 'سيُنقل إلى الأرشيف ويمكنك إخراجه لاحقًا. هل تريد الأرشفة؟'
+            : 'سيُنقل إلى سلة المهملات، ويمكنك استعادته منها أو حذفه نهائيًا من التطبيق. هل تريد المتابعة؟',
+        )}`}
+        confirmLabel={action === 'archive' ? 'أرشفة' : 'حذف'}
+        danger={action === 'delete'}
+        busy={busy}
+        error={actionError}
+        onConfirm={runAction}
+        onCancel={() => {
+          setAction(null)
+          setActionError('')
+        }}
+      />
       <div className="mt-4">
         {Number(entry.amount) > 0 && <InfoRow label="المبلغ" value={money(entry.amount, t(currencyOf(entry.details, currency)))} />}
         <InfoRow label="التاريخ" value={date(entry.due_date)} />
@@ -336,7 +458,13 @@ function EntryDetails({
       )}
 
       <p className="mt-5 rounded-inner bg-surface px-4 py-3 text-[12px] text-sub">
-        {t('التعديل والإضافة من التطبيق حاليًا. الموقع للعرض في هذه المرحلة.')}
+        {t(
+          page === 'personal'
+            ? editable
+              ? 'التعديل هنا يحفظ في حسابك ويظهر في التطبيق. الدفعات والسجلات الخاصة بالالتزام من التطبيق.'
+              : 'هذا النوع يُعدَّل من التطبيق حاليًا.'
+            : 'التعديل والإضافة من التطبيق حاليًا. الموقع للعرض في هذه المرحلة.',
+        )}
       </p>
     </div>
   )
