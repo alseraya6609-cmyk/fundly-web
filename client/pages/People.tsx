@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { Archive, Building, CheckCircle2, LayoutGrid, Pencil, Plus, ReceiptText, Trash2, UserRound, Users } from 'lucide-react'
+import { Archive, Building, CheckCircle2, LayoutGrid, Pencil, Plus, ReceiptText, ShieldCheck, Trash2, UserRound, Users } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useI18n } from '@/lib/i18n'
 import { moduleHidden, useSession } from '@/lib/session'
@@ -291,9 +291,14 @@ export default function People() {
                 {t('سندات القبض والرواتب')}
               </Link>
             )}
-            <p className="mt-5 rounded-inner bg-surface px-4 py-3 text-[12px] text-sub">
-              {t('التفويض من التطبيق.')}
-            </p>
+            <Link
+              to={`/delegations?new=${encodeURIComponent(open.fullName.trim())}`}
+              className="mt-2 flex h-11 items-center justify-center gap-1.5 rounded-inner border border-line text-[13px] font-extrabold text-ink hover:bg-surface"
+            >
+              <ShieldCheck className="size-4" />
+              {t('تفويض آخرين')}
+            </Link>
+
             <Confirm
               open={!!action}
               title={action === 'archive' ? 'أرشفة' : 'حذف الشخص'}

@@ -100,7 +100,7 @@ export default function More() {
         </div>
       </div>
 
-      <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
+      <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
         {(
           [
             ['/calendar', 'الكلندر الذكي', CalendarDays],
@@ -108,6 +108,7 @@ export default function More() {
             ['/summary', 'الملخص الشامل', LayoutDashboard],
             ['/reports', 'التقارير', FileBarChart],
             ['/salary', 'سندات القبض والرواتب', ReceiptText],
+            ['/delegations', 'التفويضات', ShieldCheck],
           ] as const
         ).map(([to, label, Icon]) => (
           <Link key={to} to={to} className="card flex flex-col items-center gap-2 px-2 py-4 text-center hover:bg-line/70">
