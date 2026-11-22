@@ -21,7 +21,13 @@ const KEY = 'people_management_records_v1'
 const PENDING_NOTE = 'بانتظار استكمال البيانات'
 const ARCHIVED_MARK = '[مؤرشف]'
 const REMINDER_NONE = 'بلا تذكير'
-const IDENTITY_DOCS = ['الهوية', 'جواز السفر', 'الضمان الصحي']
+export const IDENTITY_DOCS = ['الهوية', 'جواز السفر', 'الضمان الصحي']
+/** _kReminderOptions */
+export const DOC_REMINDERS = ['بلا تذكير', 'قبل يوم', 'قبل 3 أيام', 'قبل أسبوع', 'قبل أسبوعين', 'قبل شهر', 'مخصص']
+const REMINDERS_KEY = 'app_expiry_reminders_v1'
+
+/** وثيقة: رقم (للأفراد) أو اسم (للجهات)، وانتهاء وتذكير ومرفق (اسم الملف). */
+export type DocForm = { name: string; number: string; expiry: string; reminder: string; file: string }
 
 // _allTypeFilters (بلا «الكل» وبلا المستأجر والمؤجر: _autoOnlyTypeKeys).
 export const PERSON_TYPES: { key: string; label: string; color: string }[] = [
@@ -78,6 +84,9 @@ export type PersonForm = {
   location: string
   extra: string
   notes: string
+  /** وثائق الفرد الرسمية بالترتيب، أو وثائق الجهة بأسمائها. */
+  docs: DocForm[]
+  otherFiles: string[]
 }
 
 /** قيم النموذج من سجل (التعديل) أو فارغة (الإضافة). */
@@ -97,6 +106,97 @@ export function formOf(p?: Person, entity = false): PersonForm {
     location: v('الموقع على الخريطة'),
     extra: v('معلومات إضافية'),
     notes: p ? (p.extraNote === PENDING_NOTE ? '' : String(p.extraNote ?? '')) : '',
+    docs: isEntity
+      ? Object.keys(d)
+          .filter((k) => k.startsWith('انتهاء '))
+          .map((k) => k.slice('انتهاء '.length))
+          .map((name) => ({ name, number: '', expiry: v(`انتهاء ${name}`), reminder: v(`تذكير ${name}`) || REMINDER_NONE, file: v(`مرفق ${name}`) }))
+      : IDENTITY_DOCS.map((name) => ({ name, number: v(`رقم ${name}`), expiry: v(`انتهاء ${name}`), reminder: v(`تذكير ${name}`) || REMINDER_NONE, file: v(`مرفق ${name}`) })),
+    otherFiles: v('مرفقات أخرى').split('|').filter((x) => x.trim()),
+  }
+}
+
+/** اسم الملف من مساره (DocumentStore.fileName). */
+const baseName = (path: string) => path.split(/[\\/]/).pop() ?? path
+
+/** المستندات المسجّلة في قائمة السجل (createdDocuments). */
+function documentsOf(f: PersonForm, entity: boolean): string[] {
+  const out: string[] = []
+  if (!entity) for (const d of f.docs) if (d.number.trim() || d.file) out.push(d.name)
+  if (entity) for (const d of f.docs.filter((x) => x.name.trim())) out.push(d.expiry.trim() ? `${d.name.trim()} · ينتهي ${d.expiry.trim()}` : d.name.trim())
+  for (const path of f.otherFiles) out.push(baseName(path))
+  return out
+}
+
+/** مفاتيح الوثائق في التفاصيل. */
+function docDetails(f: PersonForm, entity: boolean): Record<string, string> {
+  const out: Record<string, string> = {}
+  if (!entity)
+    for (const d of f.docs) {
+      out[`رقم ${d.name}`] = d.number.trim()
+      out[`انتهاء ${d.name}`] = d.expiry.trim()
+      out[`تذكير ${d.name}`] = d.reminder || REMINDER_NONE
+      out[`مرفق ${d.name}`] = d.file
+    }
+  else
+    for (const d of f.docs.filter((x) => x.name.trim())) {
+      out[`انتهاء ${d.name.trim()}`] = d.expiry.trim()
+      out[`تذكير ${d.name.trim()}`] = d.reminder || REMINDER_NONE
+      out[`مرفق ${d.name.trim()}`] = d.file
+    }
+  out['مرفقات أخرى'] = f.otherFiles.join('|')
+  return out
+}
+
+/** reminderDaysFromLabel */
+const reminderDays = (label: string) => ({ 'قبل يوم': 1, 'قبل 3 أيام': 3, 'قبل أسبوع': 7, 'قبل أسبوعين': 14, 'قبل شهر': 30 })[label] ?? 0
+
+/** _registerExpiryReminder: تذكير لكل وثيقة جديدة أو تغيّر تاريخها أو تذكيرها. */
+async function registerReminders(f: PersonForm, shown: PersonForm | null, personName: string) {
+  const items: Record<string, unknown>[] = []
+  const before = new Map((shown?.docs ?? []).map((d) => [d.name.trim(), d]))
+  for (const d of f.docs) {
+    const name = d.name.trim()
+    if (!name) continue
+    const old = before.get(name)
+    if (shown && old && old.expiry.trim() === d.expiry.trim() && (old.reminder || REMINDER_NONE) === (d.reminder || REMINDER_NONE)) continue
+    const p = d.expiry.trim().split('/')
+    if (p.length !== 3) continue
+    const [day, month, year] = p.map((x) => parseInt(x, 10))
+    if ([day, month, year].some(Number.isNaN)) continue
+    const days = reminderDays(d.reminder)
+    if (days <= 0) continue
+    const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T00:00:00.000`
+    const title = `${name} — ${personName}`
+    items.push({ id: `person_doc_${Date.now() * 1000 + items.length}_${title}`, title, module: 'الأفراد والجهات', expiryDate: iso, remindBeforeDays: days })
+  }
+  if (!items.length) return
+  const uid = await userId()
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const { data, error } = await supabase.from('fundly_user_store').select('value, updated_at').eq('user_id', uid).eq('key', REMINDERS_KEY).maybeSingle()
+    if (error) throw error
+    const row = data as Row | null
+    let list: string[] = []
+    if (row) {
+      try {
+        const wrapper = JSON.parse(row.value)
+        if (wrapper?.t !== 'l' || !Array.isArray(wrapper.v)) throw new Error()
+        list = wrapper.v.map(String)
+      } catch {
+        return // شكل غير متوقع: لا يُكتب فوقه (التذكير من التطبيق).
+      }
+    }
+    const value = JSON.stringify({ t: 'l', v: [...list, ...items.map((x) => JSON.stringify(x))] })
+    const now = new Date().toISOString()
+    if (row) {
+      const { data: saved, error: saveError } = await supabase.from('fundly_user_store').update({ value, updated_at: now }).eq('user_id', uid).eq('key', REMINDERS_KEY).eq('updated_at', row.updated_at).select('key')
+      if (saveError) throw saveError
+      if (saved && saved.length) return
+    } else {
+      const { error: insertError } = await supabase.from('fundly_user_store').insert({ user_id: uid, key: REMINDERS_KEY, value, updated_at: now })
+      if (!insertError) return
+      if (String((insertError as { code?: string }).code) !== '23505') throw insertError
+    }
   }
 }
 
@@ -111,7 +211,13 @@ export function validatePerson(f: PersonForm, creating: boolean): string | null 
     creating && !f.phone.trim() ? 'رقم الهاتف' : '',
     creating && !f.birthday.trim() ? (entity ? 'تاريخ التأسيس' : 'تاريخ الميلاد') : '',
   ].filter(Boolean)
-  return missing.length ? `أكمل:| |${missing.join('|، |')}` : null
+  if (missing.length) return `أكمل:| |${missing.join('|، |')}`
+  if (entity) {
+    const names = f.docs.map((d) => d.name.trim()).filter(Boolean)
+    if (f.docs.some((d) => !d.name.trim() && (d.expiry || d.file))) return 'اكتب اسم الوثيقة'
+    if (new Set(names).size !== names.length) return 'اسم الوثيقة مكرر'
+  }
+  return null
 }
 
 type Row = { value: string; updated_at: string }
@@ -194,15 +300,7 @@ export async function createPerson(f: PersonForm): Promise<void> {
       'الموقع على الخريطة': f.location.trim(),
       'معلومات إضافية': f.extra.trim(),
     }
-    if (!entity) {
-      for (const doc of IDENTITY_DOCS) {
-        details[`رقم ${doc}`] = ''
-        details[`انتهاء ${doc}`] = ''
-        details[`تذكير ${doc}`] = REMINDER_NONE
-        details[`مرفق ${doc}`] = ''
-      }
-    }
-    details['مرفقات أخرى'] = ''
+    Object.assign(details, docDetails(f, entity))
     const stamp = today()
     const person: Item = {
       fullName: name,
@@ -219,17 +317,18 @@ export async function createPerson(f: PersonForm): Promise<void> {
       dueToYou: 0,
       dueOnYou: 0,
       openTasks: 0,
-      documentsCount: 0,
+      documentsCount: documentsOf(f, entity).length,
       lastUpdate: stamp,
       createdAt: stamp,
       sharedCommitments: [],
-      documents: [],
+      documents: documentsOf(f, entity),
       details,
       isPinned: false,
       isFrozen: false,
     }
     return [person, ...list]
   })
+  await registerReminders(f, null, name).catch(() => {})
 }
 
 /** يطبّق ما غيّره المستخدم فقط (مقارنة بما عُرض عليه) فوق أحدث نسخة. */
@@ -266,12 +365,22 @@ export async function updatePerson(original: Person, shown: PersonForm, f: Perso
     if (changed('additional') || changed('typeKey')) current.additionalCategoryNames = f.additional.filter((a) => a !== type.label)
     // مسح الملاحظة في التعديل يمسحها فعلًا.
     if (changed('notes')) current.extraNote = f.notes.trim()
+    // الوثائق: تُكتب إن تغيّرت (وثائق الجهة تُكتب من جديد لأن اسمها قد يتغيّر).
+    if (changed('docs') || changed('otherFiles')) {
+      if (entity) for (const k of Object.keys(details)) if (k.startsWith('انتهاء ') || k.startsWith('تذكير ') || k.startsWith('مرفق ')) delete details[k]
+      Object.assign(details, docDetails(f, entity))
+      const old = Array.isArray(current.documents) ? (current.documents as unknown[]).map(String) : []
+      const documents = [...old, ...documentsOf(f, entity).filter((x) => !old.includes(x))]
+      current.documents = documents
+      current.documentsCount = documents.length
+    }
     current.details = details
     current.lastUpdate = today()
     const next = [...list]
     next[index] = current
     return next
   })
+  if (JSON.stringify(f.docs) !== JSON.stringify(shown.docs)) await registerReminders(f, shown, name).catch(() => {})
 }
 
 /** الأرشفة والإخراج منها (_archivePerson): علامة في الملاحظة مع التجميد.

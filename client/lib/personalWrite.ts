@@ -562,7 +562,7 @@ function mergeJson(b: string | undefined, m: string | undefined, t: string | und
   return null
 }
 
-function mergeDetails(base: Record<string, string>, mine: Record<string, string>, theirs: Record<string, string>) {
+export function mergeDetails(base: Record<string, string>, mine: Record<string, string>, theirs: Record<string, string>) {
   const out = { ...theirs }
   const put = (key: string, value: string | undefined) => {
     if (value === undefined) delete out[key]

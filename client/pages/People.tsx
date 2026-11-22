@@ -9,6 +9,7 @@ import { MODULE_COLORS } from '@/lib/catalog'
 import { date, matches, money } from '@/lib/format'
 import { Chevron, Chip, Empty, ErrorBox, IconBadge, InfoRow, Loading, PageHeader, SearchField, SectionTitle, Sheet } from '@/components/ui'
 import { EntryCard } from '@/components/EntryCard'
+import { FileButton } from '@/components/FileButton'
 import { PersonEditor } from '@/components/PersonEditor'
 import { PersonalEditor } from '@/components/PersonalEditor'
 import { linkedAdds, recordLinkedTo, type LinkedAdd } from '@/lib/personalWrite'
@@ -215,11 +216,31 @@ export default function People() {
               <InfoRow label="مهام مفتوحة" value={num(open.openTasks) > 0 ? String(open.openTasks) : ''} />
               <InfoRow label="المستندات" value={num(open.documentsCount) > 0 ? String(open.documentsCount) : ''} />
               {Object.entries(open.details ?? {})
-                .filter(([, v]) => String(v ?? '').trim() !== '')
+                .filter(([k, v]) => String(v ?? '').trim() !== '' && !k.startsWith('مرفق ') && k !== 'مرفقات أخرى' && !(k.startsWith('تذكير ') && v === 'بلا تذكير'))
                 .slice(0, 30)
                 .map(([k, v]) => (
                   <InfoRow key={k} label={k} value={String(v)} ltr={/^[\d+\s()-]+$/.test(String(v))} />
                 ))}
+              {(() => {
+                // مرفقات الوثائق و«مرفقات أخرى»: ملفات التطبيق بأسمائها.
+                const d = open.details ?? {}
+                const files = [
+                  ...Object.entries(d)
+                    .filter(([k, v]) => k.startsWith('مرفق ') && String(v ?? '').trim())
+                    .map(([k, v]) => [k.slice('مرفق '.length), String(v)] as const),
+                  ...String(d['مرفقات أخرى'] ?? '')
+                    .split('|')
+                    .filter((x) => x.trim())
+                    .map((x) => [t('مرفقات أخرى'), x] as const),
+                ]
+                return files.length ? (
+                  <div className="mt-3 flex flex-col gap-2">
+                    {files.map(([label, path], i) => (
+                      <FileButton key={i} file={{ localPath: path }} label={label} />
+                    ))}
+                  </div>
+                ) : null
+              })()}
               <InfoRow label="ملاحظة" value={open.statusNote} />
               <InfoRow label="آخر تحديث" value={date(open.lastUpdate)} />
             </div>
@@ -262,7 +283,7 @@ export default function People() {
               )
             })()}
             <p className="mt-5 rounded-inner bg-surface px-4 py-3 text-[12px] text-sub">
-              {t('الوثائق وسندات الرواتب والتفويض من التطبيق.')}
+              {t('سندات الرواتب والتفويض من التطبيق.')}
             </p>
             <Confirm
               open={!!action}

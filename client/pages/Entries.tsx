@@ -20,8 +20,11 @@ import { CustodyPanel, SettleDialog } from '@/components/CustodyPanel'
 import { FollowupPanel } from '@/components/FollowupPanel'
 import { cancelDebt, custodyRemaining, isOwnerView, needsSettlement, settleBeforeDelete, settleCustody, type SettleMode } from '@/lib/custodyWrite'
 import { EntryError, MEDICATION_ACTIONS, logMedication } from '@/lib/personalWrite'
-import { LEDGER_TYPES, SharedError, setSharedArchived } from '@/lib/sharedWrite'
+import { LEDGER_TYPES, SharedError, deleteShared, setSharedArchived, sharedWithOthers } from '@/lib/sharedWrite'
 import { ExpenseForm } from '@/components/ExpenseForm'
+import { SharedEditor } from '@/components/SharedEditor'
+import { SHARED_FORMS } from '@/lib/sharedForm'
+import { iAmManager } from '@/lib/shared'
 import { errorText } from '@/lib/supabase'
 
 type Group = { key: string; label: string; icon: LucideIcon }
@@ -103,8 +106,9 @@ function EntriesPage({
   const [params, setParams] = useSearchParams()
   const [filter, setFilter] = useState('all')
   const [search, setSearch] = useState('')
-  // الإضافة والتعديل في «أنا» فقط (المشتركة من التطبيق حاليًا).
+  // الإضافة والتعديل في «أنا» وفي المشتركة.
   const [adding, setAdding] = useState(false)
+  const [sharedEditing, setSharedEditing] = useState<Entry | null>(null)
   const [editing, setEditing] = useState<Entry | null>(null)
   const [expenseFor, setExpenseFor] = useState<Entry | null>(null)
   const [notice, setNotice] = useState('')
@@ -147,7 +151,7 @@ function EntriesPage({
         <div className="min-w-0 flex-1">
           <SearchField value={search} onChange={setSearch} placeholder="بحث" />
         </div>
-        {page === 'personal' && (
+        {(page === 'personal' || page === 'shared') && (
           <button
             type="button"
             onClick={() => setAdding(true)}
@@ -208,6 +212,7 @@ function EntriesPage({
             editable={page === 'personal' && canEdit(open, user?.id)}
             onEdit={() => setEditing(open)}
             onAddExpense={() => setExpenseFor(open)}
+            onEditShared={() => setSharedEditing(open)}
             onChanged={(message) => {
               setParams({})
               flash(message)
@@ -223,6 +228,22 @@ function EntriesPage({
           onClose={() => setExpenseFor(null)}
           onDone={(message) => {
             setExpenseFor(null)
+            flash(message)
+          }}
+        />
+      )}
+      {page === 'shared' && (
+        <SharedEditor
+          open={adding || !!sharedEditing}
+          entry={sharedEditing ?? undefined}
+          onClose={() => {
+            setAdding(false)
+            setSharedEditing(null)
+          }}
+          onSaved={(message) => {
+            setAdding(false)
+            setSharedEditing(null)
+            setParams({})
             flash(message)
           }}
         />
@@ -299,6 +320,7 @@ function EntryDetails({
   editable = false,
   onEdit,
   onAddExpense,
+  onEditShared,
   onChanged,
 }: {
   entry: Entry
@@ -309,6 +331,7 @@ function EntryDetails({
   editable?: boolean
   onEdit?: () => void
   onAddExpense?: () => void
+  onEditShared?: () => void
   onChanged?: (message: string) => void
 }) {
   const { t } = useI18n()
@@ -345,7 +368,7 @@ function EntryDetails({
       setBusy(false)
     }
   }
-  const [action, setAction] = useState<'archive' | 'delete' | 'shared-archive' | null>(null)
+  const [action, setAction] = useState<'archive' | 'delete' | 'shared-archive' | 'shared-delete' | null>(null)
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState('')
   async function runAction() {
@@ -353,6 +376,13 @@ function EntryDetails({
     setBusy(true)
     setActionError('')
     try {
+      if (action === 'shared-delete') {
+        const mineOnly = await deleteShared(entry, profile?.fnd_id ?? '')
+        await qc.invalidateQueries({ queryKey: ['shared'] })
+        setAction(null)
+        onChanged?.(mineOnly ? `${t('تم حذف')} «${entry.title}» ${t('من عندك، وأُرسل إشعار لبقية الأعضاء')}` : 'تم حذف الالتزام')
+        return
+      }
       if (action === 'shared-archive') {
         await setSharedArchived(entry, profile?.fnd_id ?? '', true)
         await qc.invalidateQueries({ queryKey: ['shared'] })
@@ -574,8 +604,21 @@ function EntryDetails({
           }}
         />
       )}
+      {page === 'shared' &&
+        SHARED_FORMS[entry.entry_type] &&
+        !['مؤرشف', 'ملغاة', 'محذوف'].includes(entry.status) &&
+        iAmManager(entry.details ?? {}, me.fnd, [String(store.data?.['settings_profile_name'] ?? '').trim(), me.name].filter(Boolean)) && (
+          <button
+            type="button"
+            onClick={onEditShared}
+            className="mt-4 flex h-11 w-full items-center justify-center gap-1.5 rounded-inner bg-brand text-[13px] font-extrabold text-white hover:bg-brand-dark"
+          >
+            <Pencil className="size-4" />
+            {t('تعديل البيانات')}
+          </button>
+        )}
       {page === 'shared' && (
-        <div className="mt-4 grid grid-cols-2 gap-2">
+        <div className="mt-2 grid grid-cols-3 gap-2">
           {LEDGER_TYPES.includes(entry.entry_type) && !['مؤرشف', 'ملغاة', 'محذوف'].includes(entry.status) ? (
             <button
               type="button"
@@ -599,20 +642,35 @@ function EntryDetails({
             <Archive className="size-4" />
             {t('أرشفة')}
           </button>
+          <button
+            type="button"
+            onClick={() => {
+              setActionError('')
+              setAction('shared-delete')
+            }}
+            className="flex h-11 items-center justify-center gap-1.5 rounded-inner bg-danger-soft text-[13px] font-extrabold text-danger hover:bg-danger/15"
+          >
+            <Trash2 className="size-4" />
+            {t('حذف')}
+          </button>
         </div>
       )}
       <Confirm
         open={!!action}
-        title={action === 'delete' ? 'حذف الالتزام' : 'أرشفة الالتزام'}
+        title={action === 'delete' || action === 'shared-delete' ? 'حذف الالتزام' : 'أرشفة الالتزام'}
         message={`«${entry.title}» — ${t(
-          action === 'shared-archive'
+          action === 'shared-delete'
+            ? sharedWithOthers(entry.details ?? {}, profile?.fnd_id ?? '')
+              ? 'يُحذف من عندك وحدك ويبقى عند بقية الأعضاء، ويصلهم إشعار. هل تريد الحذف؟'
+              : 'سيُحذف نهائيًا، ولا يمكن التراجع عن هذا الإجراء. هل تريد الحذف؟'
+            : action === 'shared-archive'
             ? 'يُؤرشف عندك وحدك ويبقى عند بقية الأعضاء، ويصلهم إشعار. هل تريد الأرشفة؟'
             : action === 'archive'
               ? 'سيُنقل إلى الأرشيف ويمكنك إخراجه لاحقًا. هل تريد الأرشفة؟'
               : 'سيُنقل إلى سلة المهملات، ويمكنك استعادته منها أو حذفه نهائيًا من التطبيق. هل تريد المتابعة؟',
         )}`}
-        confirmLabel={action === 'delete' ? 'حذف' : 'أرشفة'}
-        danger={action === 'delete'}
+        confirmLabel={action === 'delete' || action === 'shared-delete' ? 'حذف' : 'أرشفة'}
+        danger={action === 'delete' || action === 'shared-delete'}
         busy={busy}
         error={actionError}
         onConfirm={runAction}
@@ -726,9 +784,7 @@ function EntryDetails({
               : entry.user_id && user?.id && entry.user_id !== user.id
                 ? 'بيانات هذا الالتزام يعدّلها صاحبه.'
                 : 'هذا النوع يُعدَّل من التطبيق حاليًا.'
-            : entry.entry_type === 'جمعية مالية' || entry.entry_type === 'جمعية'
-              ? 'المساهمات وتسليم الدورات تُسجَّل هنا، وإنشاء الالتزام وتعديله وحذفه من التطبيق حاليًا.'
-              : 'المصروفات والميزانية والتسوية والموافقات هنا، وإنشاء الالتزام وتعديله وحذفه من التطبيق حاليًا.',
+            : 'مغادرة الالتزام المشترك وإلغاؤه وسجله التاريخي من التطبيق حاليًا.',
         )}
       </p>
     </div>

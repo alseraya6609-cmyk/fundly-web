@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Building, UserRound } from 'lucide-react'
+import { Building, Loader2, Paperclip, Plus, Trash2, UserRound, X } from 'lucide-react'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/format'
 import { errorText } from '@/lib/supabase'
 import type { Person } from '@/lib/data'
-import { PeopleError, createPerson, formOf, isEntityKey, typesFor, updatePerson, validatePerson, type PersonForm } from '@/lib/peopleWrite'
+import { DOC_REMINDERS, PeopleError, createPerson, formOf, isEntityKey, typesFor, updatePerson, validatePerson, type DocForm, type PersonForm } from '@/lib/peopleWrite'
+import { FileError, uploadDeviceFile } from '@/lib/files'
 import { Sheet } from './ui'
 import { Confirm } from './Confirm'
 
@@ -13,7 +14,9 @@ import { Confirm } from './Confirm'
   نموذج الفرد والجهة كما في التطبيق (_openContactFormSheet): النوع أولًا،
   ثم الاسم والهاتف والبريد والجنسية (للأفراد) وتاريخ الميلاد أو التأسيس
   والعنوان والموقع والتصنيفات الإضافية والملاحظات والمعلومات الإضافية.
-  الوثائق ومرفقاتها من التطبيق.
+  والوثائق: للفرد الهوية وجواز السفر والضمان الصحي (رقم وانتهاء وتذكير ومرفق)
+  و«مرفقات أخرى»، وللجهة وثائق بأسمائها. المرفق يُرفع كملفات التطبيق
+  (fundly-files) ويُحفظ اسمه.
 */
 
 const inputClass =
@@ -42,6 +45,98 @@ function Field({ label, required, children, wide = true }: { label: string; requ
       </span>
       {children}
     </label>
+  )
+}
+
+/** زر مرفق: يرفع الملف فورًا ويعيد اسمه. */
+function FilePick({ file, onChange, label }: { file: string; onChange: (name: string) => void; label: string }) {
+  const { t } = useI18n()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  if (file)
+    return (
+      <span className="flex h-10 items-center justify-between gap-2 rounded-inner bg-white px-3 text-[12px] font-bold text-ink">
+        <span className="flex min-w-0 items-center gap-1.5">
+          <Paperclip className="size-3.5 shrink-0 text-brand" />
+          <span className="truncate" dir="auto">
+            {file.split(/[\\/]/).pop()}
+          </span>
+        </span>
+        <button type="button" aria-label={t('إزالة')} onClick={() => onChange('')} className="text-danger">
+          <X className="size-4" />
+        </button>
+      </span>
+    )
+  return (
+    <div>
+      <label className="flex h-10 cursor-pointer items-center justify-center gap-1.5 rounded-inner border border-brand text-[12.5px] font-extrabold text-brand hover:bg-brand-soft">
+        {busy ? <Loader2 className="size-4 animate-spin" /> : <Paperclip className="size-4" />}
+        {t(label)}
+        <input
+          type="file"
+          className="hidden"
+          accept="image/*,application/pdf"
+          disabled={busy}
+          onChange={async (e) => {
+            const picked = e.target.files?.[0]
+            e.target.value = ''
+            if (!picked) return
+            setBusy(true)
+            setError('')
+            try {
+              onChange(await uploadDeviceFile(picked))
+            } catch (err) {
+              setError(err instanceof FileError ? err.message : 'تعذّر رفع الملف. حاول مرة أخرى.')
+            } finally {
+              setBusy(false)
+            }
+          }}
+        />
+      </label>
+      {error && <p className="mt-1 text-[11px] font-bold text-danger">{t(error)}</p>}
+    </div>
+  )
+}
+
+/** كتلة وثيقة: رقم أو اسم، وتاريخ الانتهاء، والتذكير، والمرفق (_identityDocBlock، _entityDocsBlock). */
+function DocBlock({ doc, entity, onChange, onRemove }: { doc: DocForm; entity: boolean; onChange: (d: DocForm) => void; onRemove?: () => void }) {
+  const { t } = useI18n()
+  const set = <K extends keyof DocForm>(k: K, v: DocForm[K]) => onChange({ ...doc, [k]: v })
+  return (
+    <div className="col-span-2 flex flex-col gap-2 rounded-inner bg-field p-3">
+      <div className="flex items-center justify-between">
+        {entity ? (
+          <input dir="auto" value={doc.name} placeholder={t('اسم الوثيقة')} onChange={(e) => set('name', e.target.value)} className={cn(inputClass, 'h-10 bg-white')} />
+        ) : (
+          <p className="text-[13px] font-extrabold text-title">{t(doc.name)}</p>
+        )}
+        {onRemove && (
+          <button type="button" aria-label={t('حذف')} onClick={onRemove} className="ms-2 grid size-9 shrink-0 place-items-center rounded-inner text-danger hover:bg-danger-soft">
+            <Trash2 className="size-4" />
+          </button>
+        )}
+      </div>
+      {!entity && (
+        <input dir="ltr" value={doc.number} placeholder={t('الرقم')} onChange={(e) => set('number', e.target.value)} className={cn(inputClass, 'h-10 bg-white')} />
+      )}
+      <div className="grid grid-cols-2 gap-2">
+        <label className="flex flex-col gap-1">
+          <span className="text-[11px] font-bold text-sub">{t('تاريخ الانتهاء')}</span>
+          <input type="date" value={toInputDate(doc.expiry)} onChange={(e) => set('expiry', fromInputDate(e.target.value))} className={cn(inputClass, 'h-10 bg-white')} />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-[11px] font-bold text-sub">{t('تذكير')}</span>
+          <select value={DOC_REMINDERS.includes(doc.reminder) ? doc.reminder : 'بلا تذكير'} onChange={(e) => set('reminder', e.target.value)} className={cn(inputClass, 'h-10 bg-white')}>
+            {DOC_REMINDERS.map((o) => (
+              <option key={o} value={o}>
+                {t(o)}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <FilePick file={doc.file} onChange={(name) => set('file', name)} label="إضافة مرفق" />
+    </div>
   )
 }
 
@@ -162,7 +257,37 @@ function Body({ person, entity, onDone }: { person?: Person; entity: boolean; on
           <textarea rows={2} dir="auto" value={f.extra} onChange={(e) => set('extra', e.target.value)} className={cn(inputClass, 'h-auto py-3')} />
         </Field>
       </div>
-      <p className="mt-3 rounded-inner bg-surface px-3 py-2 text-[11px] text-sub">{t('الوثائق ومرفقاتها وتذكيراتها تُضاف من التطبيق.')}</p>
+      <p className="mb-2 mt-5 text-[14px] font-extrabold text-title">{t('الوثائق')}</p>
+      <div className="grid grid-cols-2 gap-3">
+        {f.docs.map((doc, i) => (
+          <DocBlock
+            key={entity ? i : doc.name}
+            doc={doc}
+            entity={entity}
+            onChange={(d) => set('docs', f.docs.map((x, j) => (j === i ? d : x)))}
+            onRemove={entity ? () => set('docs', f.docs.filter((_, j) => j !== i)) : undefined}
+          />
+        ))}
+        {entity && (
+          <button
+            type="button"
+            onClick={() => set('docs', [...f.docs, { name: '', number: '', expiry: '', reminder: 'بلا تذكير', file: '' }])}
+            className="col-span-2 flex h-10 items-center justify-center gap-1.5 rounded-inner border border-dashed border-brand text-[12.5px] font-extrabold text-brand hover:bg-brand-soft"
+          >
+            <Plus className="size-4" />
+            {t('إضافة وثيقة أخرى')}
+          </button>
+        )}
+        {!entity && (
+          <div className="col-span-2 flex flex-col gap-2 rounded-inner bg-field p-3">
+            <p className="text-[13px] font-extrabold text-title">{t('مرفقات أخرى')}</p>
+            {f.otherFiles.map((file, i) => (
+              <FilePick key={file} file={file} label="" onChange={(name) => set('otherFiles', name ? f.otherFiles.map((x, j) => (j === i ? name : x)) : f.otherFiles.filter((_, j) => j !== i))} />
+            ))}
+            <FilePick file="" label="إضافة مرفق" onChange={(name) => name && set('otherFiles', [...f.otherFiles, name])} />
+          </div>
+        )}
+      </div>
       {error && (
         <p className="mt-3 rounded-inner bg-danger-soft px-3 py-2 text-[12px] font-bold text-danger">
           {error

@@ -626,3 +626,61 @@ export async function roscaChangeReceiver(entry: Entry, index: number, picked: s
     return { [CYCLES_KEY]: JSON.stringify(data), [EVENTS_KEY]: withEvent(details, text) }
   })
 }
+
+// ---------------- حذف الالتزام المشترك (_deleteCommitment) ----------------
+
+const REMOVED_KEY = 'محذوف عند'
+
+/** فيه أعضاء آخرون بأرقامهم؟ (SharedMemberState.sharedWithOthers) */
+export function sharedWithOthers(details: Record<string, unknown>, me: string): boolean {
+  if (!me) return false
+  return [...participants(asStrings(details))].some((id) => id !== me)
+}
+
+/** SharedMemberState.removedByAll */
+function removedByAll(details: Record<string, string>): boolean {
+  const creator = (details[CREATOR_ID_KEY] ?? '').trim()
+  if (!creator) return false
+  const all = participants(details)
+  if ([...all].every((id) => id === creator)) return false
+  all.add(creator)
+  const removed = idsIn(details, REMOVED_KEY)
+  return [...all].every((id) => removed.has(id))
+}
+const CREATOR_ID_KEY = 'معرف المنشئ'
+
+/**
+  فيه أعضاء آخرون: يُحذف من عندي وحدي («محذوف عند»)، ويبقى عندهم ويصلهم
+  إشعار، وآخر من يحذفه يحذفه من الخادم. بلا أعضاء آخرين: حذف نهائي.
+  يعيد true إن حُذف من عندي وحدي.
+*/
+export async function deleteShared(entry: Entry, me: string): Promise<boolean> {
+  if (!me) throw new SharedError('تعذر حذف الالتزام. حاول مرة أخرى.')
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const { data, error } = await supabase.from('shared_entries').select('id, status, details, updated_at').eq('id', entry.id).maybeSingle()
+    if (error) throw error
+    if (!data) return false
+    const row = data as Row
+    const details = asStrings(row.details)
+    if (!sharedWithOthers(details, me)) {
+      const { error: deleteError } = await supabase.from('shared_entries').delete().eq('id', row.id)
+      if (deleteError) throw deleteError
+      return false
+    }
+    const set = idsIn(details, REMOVED_KEY)
+    set.add(me)
+    const nextDetails = { ...details, [REMOVED_KEY]: JSON.stringify([...set].sort()) }
+    const { data: saved, error: saveError } = await supabase
+      .from('shared_entries')
+      .update({ details: { ...row.details, [REMOVED_KEY]: nextDetails[REMOVED_KEY] } })
+      .eq('id', row.id)
+      .eq('updated_at', row.updated_at)
+      .select('id')
+    if (saveError) throw saveError
+    if (!saved || saved.length === 0) continue
+    // آخر عضو حذفه: يُحذف من الخادم (ينجح للمالك فقط حسب الصلاحيات).
+    if (removedByAll(nextDetails)) await supabase.from('shared_entries').delete().eq('id', row.id)
+    return true
+  }
+  throw new SharedError('تغيّرت البيانات أثناء الحفظ — أعد المحاولة')
+}

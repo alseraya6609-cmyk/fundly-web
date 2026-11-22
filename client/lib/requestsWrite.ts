@@ -92,7 +92,7 @@ async function writeDetails(table: string, row: Row, details: Record<string, unk
 }
 
 /** SharedMemberState.stampInvites: كل رقم عضو بلا وقت دعوة يُسجَّل وقته الآن (كما يفعل التطبيق عند كل حفظ). */
-function stampInvites(details: Record<string, string>): Record<string, string> {
+export function stampInvites(details: Record<string, string>): Record<string, string> {
   const raw = details['الأعضاء'] ?? ''
   if (!raw) return details
   const creator = (details[CREATOR_KEY] ?? '').trim()

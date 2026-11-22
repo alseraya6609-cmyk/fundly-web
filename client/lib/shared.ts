@@ -344,7 +344,7 @@ function addMonths(start: Date, steps: number) {
   return new Date(year, month, Math.min(start.getDate(), last))
 }
 
-function cycleDate(start: Date, frequency: string, steps: number) {
+export function cycleDate(start: Date, frequency: string, steps: number) {
   switch (frequency.trim()) {
     case 'أسبوعي':
       return new Date(start.getFullYear(), start.getMonth(), start.getDate() + 7 * steps)
