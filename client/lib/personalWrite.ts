@@ -643,3 +643,177 @@ export async function trashEntry(entry: Entry) {
 }
 
 export { displayDate }
+
+// ---------------- الدفعات وزيادة الدين (_openSubscriptionPaymentForm، _openDebtIncreaseForm) ----------------
+/*
+  «تسجيل سداد / سداد جزئي» للقسط والاشتراك والدين، و«زيادة على الدين السابق»
+  للقسط والدين، كما في تفاصيل الالتزام في التطبيق:
+  - الدفعة تُضاف أولَ «سجل دفعات الالتزام»: {الدافع، ملاحظات؟، المبلغ، التاريخ،
+    وقت التسجيل، سجّلها، معرّف المسجِّل، مرفق الفاتورة؟}. صورة الفاتورة إلزامية
+    إلا في الدين، وتصير أيضًا مرفق السجل العام كما يفعل التطبيق.
+  - الدين: الدافع هو اسمي الظاهر، ويسدّده المدين وحده (وبعد قبول الربط إن كان
+    مرتبطًا)، ويزيده الدائن.
+  - الزيادة: سطر في «سجل الزيادات» والمبلغ الإجمالي يزيد.
+  الكتابة على أحدث نسخة في الخادم، للتفاصيل والأعمدة المتغيّرة وحدها، وبشرط
+  ألا يكون السجل تغيّر منذ قراءته — فيكتبها الطرف الثاني في الدين أيضًا.
+*/
+
+export const PAYMENTS_KEY = 'سجل دفعات الالتزام'
+const INCREASES_KEY = 'سجل الزيادات'
+
+export class EntryError extends Error {}
+
+type Assignment = { ownerId: string; holderId: string; state: string }
+const assignmentOf = (d: Record<string, unknown>): Assignment => ({
+  ownerId: String(d['عهدة_مالك_المعرّف'] ?? '').trim(),
+  holderId: String(d['عهدة_مسندة_إلى'] ?? '').trim(),
+  state: String(d['عهدة_حالة_الإسناد'] ?? '').trim(),
+})
+const isAssigned = (a: Assignment) => ['بانتظار القبول', 'مقبولة', 'مرفوضة'].includes(a.state)
+
+/** CustodyAssignment.roleFor */
+export function roleFor(details: Record<string, unknown>, me: string): 'soleOwner' | 'owner' | 'holder' | 'observer' {
+  const a = assignmentOf(details)
+  if (!isAssigned(a)) return a.ownerId && a.ownerId !== me ? 'observer' : 'soleOwner'
+  if (a.ownerId && a.ownerId === me) return 'owner'
+  if (a.holderId && a.holderId === me) return 'holder'
+  if (!a.ownerId && a.holderId !== me) return 'soleOwner'
+  return 'observer'
+}
+
+/** _isDebtCreditor */
+function isDebtCreditor(details: Record<string, unknown>, me: string) {
+  const ownerIsCreditor = !String(details['نوع الدين'] ?? '').trim().startsWith('له')
+  const role = roleFor(details, me)
+  if (role === 'owner' || role === 'soleOwner') return ownerIsCreditor
+  if (role === 'holder') return !ownerIsCreditor
+  return false
+}
+
+/** _canRepayDebt */
+function canRepayDebt(details: Record<string, unknown>, me: string) {
+  const role = roleFor(details, me)
+  const accepted = assignmentOf(details).state === 'مقبولة'
+  if (role === 'observer') return false
+  if (role === 'holder' && !accepted) return false
+  if (!accepted) return true
+  return !isDebtCreditor(details, me)
+}
+
+/** ما يظهر من «+ إضافة» (_quickAddRows): السداد والزيادة. */
+export function paymentActions(entry: Entry, me: string): { pay: boolean; increase: boolean } {
+  if (['مؤرشف', 'محذوف', 'ملغاة'].includes(entry.status)) return { pay: false, increase: false }
+  const d = entry.details ?? {}
+  switch (entry.entry_type) {
+    case 'قسط':
+      return { pay: true, increase: true }
+    case 'دين / قرض / سلفة':
+      return { pay: canRepayDebt(d, me), increase: isDebtCreditor(d, me) }
+    case 'اشتراك':
+    case 'اشتراكات':
+      return { pay: true, increase: false }
+    default:
+      return { pay: false, increase: false }
+  }
+}
+
+function paymentsOf(details: Record<string, unknown>): Record<string, unknown>[] {
+  try {
+    const raw = details[PAYMENTS_KEY]
+    const list = typeof raw === 'string' ? JSON.parse(raw || '[]') : raw ?? []
+    return Array.isArray(list) ? list.filter((x) => x && typeof x === 'object') : []
+  } catch {
+    return []
+  }
+}
+
+/** _subscriptionTotalPaid */
+export const totalPaid = (details: Record<string, unknown>) => paymentsOf(details).reduce((s, p) => s + parseAmountInt(String(p['المبلغ'] ?? '')), 0)
+
+/** المتبقي = الإجمالي − المدفوع (_CommitmentItem.amount). */
+export const remainingOf = (entry: Entry) => Math.round(Number(entry.amount) || 0) - totalPaid(entry.details ?? {})
+
+type Fresh = { id: string; amount: number; details: Record<string, unknown>; attachment_url: string | null; updated_at: string; status: string; entry_type: string }
+
+/** قراءة أحدث نسخة، وتطبيق التغيير، والكتابة بشرط عدم تغيّرها. */
+async function mutateEntry(entry: Entry, change: (row: Fresh, details: Record<string, string>) => Record<string, unknown>) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const { data, error } = await supabase.from(TABLE).select('id, amount, details, attachment_url, updated_at, status, entry_type').eq('id', entry.id).maybeSingle()
+    if (error) throw error
+    if (!data) throw new EntryError('السجل غير موجود — ربما حُذف من التطبيق')
+    const row = data as Fresh
+    const patch = change(row, asStrings(row.details))
+    const { data: saved, error: saveError } = await supabase.from(TABLE).update(patch).eq('id', row.id).eq('updated_at', row.updated_at).select('id')
+    if (saveError) throw saveError
+    if (saved && saved.length) return
+  }
+  throw new EntryError('تغيّرت البيانات أثناء الحفظ — أعد المحاولة')
+}
+
+/** إضافة عنصر أولَ قائمة JSON نصًّا، دون إعادة كتابة ما قبله. */
+function prependJson(raw: string, item: Record<string, unknown>): string {
+  const text = raw.trim()
+  if (!text) return JSON.stringify([item])
+  try {
+    if (!Array.isArray(JSON.parse(text))) throw new Error()
+  } catch {
+    throw new EntryError('تعذّرت قراءة السجل — نفّذ ذلك من التطبيق')
+  }
+  const inner = text.slice(1).trim()
+  return `[${JSON.stringify(item)}${inner === ']' ? ']' : `,${inner}`}`
+}
+
+export type PaymentInput = { payer: string; amount: string; date: string; note: string; invoice: File | null }
+
+/** يعيد رسالة الخطأ أو null (مدقّق النموذج في التطبيق). */
+export function validatePayment(entry: Entry, input: PaymentInput): string | null {
+  const isDebt = entry.entry_type === 'دين / قرض / سلفة'
+  if (!isDebt && !input.payer.trim()) return 'أدخل اسم الشخص الذي دفع'
+  const amount = parseFloat(latin(input.amount.trim()))
+  if (!/^\d+(\.\d+)?$/.test(latin(input.amount.trim())) || !(amount > 0)) return 'أدخل مبلغ دفعة صحيحاً'
+  if (amount > remainingOf(entry)) return 'المبلغ أكبر من المتبقي'
+  if (!input.date.trim()) return 'حدد تاريخ الدفع'
+  if (!isDebt && !input.invoice) return 'يرجى إضافة صورة من الفاتورة'
+  return null
+}
+
+export async function addPayment(entry: Entry, input: PaymentInput, me: Me) {
+  const problem = validatePayment(entry, input)
+  if (problem) throw new EntryError(problem)
+  const isDebt = entry.entry_type === 'دين / قرض / سلفة'
+  if (isDebt && !canRepayDebt(entry.details ?? {}, me.fnd)) throw new EntryError('السداد يسجّله المدين — لك الزيادة والمطالبة')
+  const userId = await currentUserId()
+  const invoicePath = input.invoice ? await uploadAttachment(userId, input.invoice) : ''
+  const amount = Math.round(parseFloat(latin(input.amount.trim())))
+  const payment: Record<string, unknown> = { الدافع: isDebt ? me.name : input.payer.trim() }
+  if (isDebt && input.note.trim()) payment['ملاحظات'] = input.note.trim()
+  payment['المبلغ'] = String(amount)
+  payment['التاريخ'] = input.date.trim()
+  payment['وقت التسجيل'] = clockNow()
+  payment['سجّلها'] = me.name
+  payment['معرّف المسجِّل'] = me.fnd
+  if (invoicePath) payment['مرفق الفاتورة'] = invoicePath
+  await mutateEntry(entry, (row, details) => {
+    // المتبقي من أحدث نسخة: لا تتجاوز الدفعات الإجمالي.
+    if (amount > Math.round(Number(row.amount) || 0) - totalPaid(details)) throw new EntryError('المبلغ أكبر من المتبقي')
+    const patch: Record<string, unknown> = { details: { ...row.details, [PAYMENTS_KEY]: prependJson(details[PAYMENTS_KEY] ?? '', payment) } }
+    if (invoicePath) patch.attachment_url = invoicePath
+    return patch
+  })
+}
+
+/** «زيادة على الدين السابق»: يعيد الإجمالي الجديد. */
+export async function increaseDebt(entry: Entry, amountText: string, note: string, currency: string, me: string): Promise<number> {
+  const amount = parseFloat(latin(amountText.trim()))
+  if (!/^\d+(\.\d+)?$/.test(latin(amountText.trim())) || !(amount > 0)) throw new EntryError('أدخل مبلغ زيادة صحيحًا')
+  if (!paymentActions(entry, me).increase) throw new EntryError('الزيادة يسجّلها الدائن')
+  const n = new Date()
+  const line = `${Math.round(amount)} ${currency} — ${n.getFullYear()}/${n.getMonth() + 1}/${n.getDate()}${note.trim() ? ` — ${note.trim()}` : ''}`
+  let total = 0
+  await mutateEntry(entry, (row, details) => {
+    const previous = details[INCREASES_KEY] ?? ''
+    total = Math.round(Number(row.amount) || 0) + Math.round(amount)
+    return { amount: total, details: { ...row.details, [INCREASES_KEY]: previous ? `${previous}\n${line}` : line } }
+  })
+  return total
+}

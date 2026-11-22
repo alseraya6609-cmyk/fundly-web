@@ -1,10 +1,10 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Archive, CheckCircle2, ClipboardList, LayoutGrid, Pencil, Plus, Receipt, Trash2, UserRound, UsersRound, type LucideIcon } from 'lucide-react'
+import { Archive, CheckCircle2, ClipboardList, HandCoins, LayoutGrid, Pencil, Plus, Receipt, Trash2, TrendingUp, UserRound, UsersRound, type LucideIcon } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useI18n } from '@/lib/i18n'
 import { moduleHidden, useSession } from '@/lib/session'
-import { currencyOf, custodyRole, useCommitmentExtras, useCurrency, usePersonal, useShared, type Entry } from '@/lib/data'
+import { currencyOf, custodyRole, useCommitmentExtras, useCurrency, usePersonal, useShared, useStore, type Entry } from '@/lib/data'
 import { MODULE_COLORS, PERSONAL_GROUPS, personalGroup, SHARED_GROUPS, sharedLabel } from '@/lib/catalog'
 import { date, matches, money } from '@/lib/format'
 import { Chip, Empty, ErrorBox, InfoRow, Loading, PageHeader, SearchField, SectionTitle, Sheet } from '@/components/ui'
@@ -13,7 +13,9 @@ import { FileButton } from '@/components/FileButton'
 import { SharedDetails } from '@/components/SharedDetails'
 import { PersonalEditor } from '@/components/PersonalEditor'
 import { Confirm } from '@/components/Confirm'
-import { archiveEntry, canEdit, trashEntry } from '@/lib/personalWrite'
+import { archiveEntry, canEdit, paymentActions, remainingOf, trashEntry } from '@/lib/personalWrite'
+import { publicName } from '@/lib/requestsWrite'
+import { IncreaseForm, PaymentForm } from '@/components/PaymentForm'
 import { LEDGER_TYPES, SharedError, setSharedArchived } from '@/lib/sharedWrite'
 import { ExpenseForm } from '@/components/ExpenseForm'
 import { errorText } from '@/lib/supabase'
@@ -306,8 +308,13 @@ function EntryDetails({
   onChanged?: (message: string) => void
 }) {
   const { t } = useI18n()
-  const { profile } = useSession()
+  const { profile, user } = useSession()
   const qc = useQueryClient()
+  const store = useStore()
+  const me = { fnd: profile?.fnd_id ?? '', name: publicName(store.data, profile?.display_name ?? '') }
+  const money$ = page === 'personal' ? paymentActions(entry, me.fnd) : { pay: false, increase: false }
+  const ownCurrency = currencyOf(entry.details, currency)
+  const [moneyForm, setMoneyForm] = useState<'pay' | 'increase' | null>(null)
   const [action, setAction] = useState<'archive' | 'delete' | 'shared-archive' | null>(null)
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState('')
@@ -372,6 +379,54 @@ function EntryDetails({
           </button>
         </div>
       )}
+      {(money$.pay || money$.increase) && (
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          {money$.pay && (
+            <button
+              type="button"
+              onClick={() => setMoneyForm('pay')}
+              className="flex h-11 items-center justify-center gap-1.5 rounded-inner bg-brand-mid text-[13px] font-extrabold text-white hover:bg-brand"
+            >
+              <HandCoins className="size-4" />
+              {t('تسجيل سداد / سداد جزئي')}
+            </button>
+          )}
+          {money$.increase && (
+            <button
+              type="button"
+              onClick={() => setMoneyForm('increase')}
+              className="flex h-11 items-center justify-center gap-1.5 rounded-inner border border-brand text-[13px] font-extrabold text-brand hover:bg-brand-soft"
+            >
+              <TrendingUp className="size-4" />
+              {t('زيادة على الدين السابق')}
+            </button>
+          )}
+        </div>
+      )}
+      {moneyForm === 'pay' && (
+        <PaymentForm
+          entry={entry}
+          currency={ownCurrency}
+          me={me}
+          onClose={() => setMoneyForm(null)}
+          onDone={(message) => {
+            setMoneyForm(null)
+            onChanged?.(message)
+          }}
+        />
+      )}
+      {moneyForm === 'increase' && (
+        <IncreaseForm
+          entry={entry}
+          currency={ownCurrency}
+          me={me.fnd}
+          onClose={() => setMoneyForm(null)}
+          onDone={(message) => {
+            setMoneyForm(null)
+            onChanged?.(message)
+          }}
+        />
+      )}
       {page === 'shared' && (
         <div className="mt-4 grid grid-cols-2 gap-2">
           {LEDGER_TYPES.includes(entry.entry_type) && !['مؤرشف', 'ملغاة', 'محذوف'].includes(entry.status) ? (
@@ -421,6 +476,7 @@ function EntryDetails({
       />
       <div className="mt-4">
         {Number(entry.amount) > 0 && <InfoRow label="المبلغ" value={money(entry.amount, t(currencyOf(entry.details, currency)))} />}
+        {(money$.pay || money$.increase) && <InfoRow label="المتبقي" value={money(remainingOf(entry), t(ownCurrency))} />}
         <InfoRow label="التاريخ" value={date(entry.due_date)} />
         <InfoRow label="الحالة" value={t(entry.status)} />
         {fields.map(([key, value]) => (
@@ -517,7 +573,9 @@ function EntryDetails({
           page === 'personal'
             ? editable
               ? 'التعديل هنا يحفظ في حسابك ويظهر في التطبيق. الدفعات والسجلات الخاصة بالالتزام من التطبيق.'
-              : 'هذا النوع يُعدَّل من التطبيق حاليًا.'
+              : entry.user_id && user?.id && entry.user_id !== user.id
+                ? 'بيانات هذا الالتزام يعدّلها صاحبه.'
+                : 'هذا النوع يُعدَّل من التطبيق حاليًا.'
             : entry.entry_type === 'جمعية مالية' || entry.entry_type === 'جمعية'
               ? 'المساهمات وتسليم الدورات تُسجَّل هنا، وإنشاء الالتزام وتعديله وحذفه من التطبيق حاليًا.'
               : 'المصروفات والميزانية والتسوية والموافقات هنا، وإنشاء الالتزام وتعديله وحذفه من التطبيق حاليًا.',
