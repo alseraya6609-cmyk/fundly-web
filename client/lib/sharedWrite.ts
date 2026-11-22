@@ -1,6 +1,6 @@
 import { supabase } from './supabase'
 import type { Entry } from './data'
-import { POT, hasBudget, iAmManager, memberNames, parseMoney, remaining, settlements, settleTransfers } from './shared'
+import { POT, cycleComplete, cycleShareOf, hasBudget, iAmManager, memberNames, memberPaid, paidBy, parseMoney, remaining, roscaParseDate, roscaPlan, settlements, settleTransfers, withoutFnd } from './shared'
 
 /*
   أرشفة الالتزام المشترك وإخراجه من الأرشيف كما في التطبيق
@@ -265,7 +265,10 @@ async function mutateShared(entry: Entry, change: (details: Record<string, strin
     const nextDetails = { ...details, ...changed }
     const patch: Record<string, unknown> = { details: { ...row.details, ...changed } }
     if (row.status === 'نشطة' || row.status === 'مكتملة') {
-      const done = settlements(nextDetails).length > 0 && settleTransfers(nextDetails, memberNames(nextDetails)).length === 0
+      // _resolvedStatus: الجمعية تكتمل حين تكتمل كل دوراتها وتُسلَّم، وغيرها حين يُسوّى الحساب.
+      const done = isCircleType(entry.entry_type)
+        ? roscaDone(nextDetails)
+        : settlements(nextDetails).length > 0 && settleTransfers(nextDetails, memberNames(nextDetails)).length === 0
       const wanted = done ? 'مكتملة' : 'نشطة'
       if (wanted !== row.status) patch.status = wanted
     }
@@ -274,6 +277,13 @@ async function mutateShared(entry: Entry, change: (details: Record<string, strin
     if (saved && saved.length) return
   }
   throw new SharedError('تغيّرت البيانات أثناء الحفظ — أعد المحاولة')
+}
+
+const isCircleType = (type: string) => type === 'جمعية مالية' || type === 'جمعية'
+
+function roscaDone(details: Record<string, string>): boolean {
+  const plan = roscaPlan(details, memberNames(details))
+  return plan.cycles.length > 0 && plan.cycles.every((c) => cycleComplete(c) && c.payoutDate.trim() !== '')
 }
 
 /** الموافقة على مصروف أو ميزانية إضافية بانتظار الموافقة، أو رفضه. */
@@ -381,4 +391,206 @@ export async function recordSettlements(entry: Entry, picked: string[], shown: {
 export function isLumpSum(details: Record<string, unknown>): boolean {
   const method = String(details['طريقة تحصيل المبلغ'] ?? '').trim()
   return method ? method === 'دفعة مقطوعة' : hasBudget(details)
+}
+
+// ---------------- الجمعية: المساهمات وتسليم الدورة ----------------
+/*
+  كما في التطبيق (shared_commitments_screen.dart ← _openRoscaPaymentForm،
+  _roscaMarkAllPaid، _roscaDeletePayment، _roscaTogglePayout، و
+  rosca_cycles.dart ← RoscaLedger): مفتاح واحد «سجل دورات الجمعية» خريطة
+  رقم الدورة ← {payments، receiver، payout}. المساهمة تُضاف إلى payments،
+  والتسليم تاريخ في payout (فارغ = إلغاء التسليم) مع حدث في «سجل الأحداث».
+  تسجيل المساهمة لأي عضو كما في التطبيق؛ التسليم وإلغاؤه وحذف مساهمة من
+  الموقع للمسؤول وحده.
+*/
+
+const CYCLES_KEY = 'سجل دورات الجمعية'
+const EVENTS_KEY = 'سجل الأحداث'
+const END_KEY = 'تاريخ النهاية'
+
+const roscaDate = (d: Date) => `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}`
+const plainMoney = (value: number, currency: string) => {
+  const v = Math.abs(value)
+  return `${v.toFixed(v % 1 === 0 ? 0 : 2)} ${currency}`.trim()
+}
+
+type CycleMap = Record<string, unknown>
+
+function cyclesOf(details: Record<string, string>): CycleMap {
+  const raw = (details[CYCLES_KEY] ?? '').trim()
+  if (!raw) return {}
+  try {
+    const v = JSON.parse(raw)
+    if (v && typeof v === 'object' && !Array.isArray(v)) return v as CycleMap
+  } catch {
+    // تالف: لا يُكتب فوقه.
+  }
+  throw new SharedError('تعذّرت قراءة السجل — نفّذ ذلك من التطبيق')
+}
+
+function cycleAt(data: CycleMap, index: number): Record<string, unknown> {
+  const e = data[String(index)]
+  return e && typeof e === 'object' && !Array.isArray(e) ? { ...(e as Record<string, unknown>) } : {}
+}
+
+function paymentJson(p: { id: string; member: string; amount: number; date: string; note: string; receipt?: string }) {
+  const row: Record<string, unknown> = { id: p.id, member: p.member, amount: p.amount, date: p.date, note: p.note }
+  if (p.receipt) row.receipt = p.receipt
+  return row
+}
+
+function withPayments(details: Record<string, string>, index: number, rows: Record<string, unknown>[]): string {
+  const data = cyclesOf(details)
+  const cycle = cycleAt(data, index)
+  cycle.payments = [...(Array.isArray(cycle.payments) ? cycle.payments : []), ...rows]
+  data[String(index)] = cycle
+  return JSON.stringify(data)
+}
+
+/** _roscaWithEnoughEnd: النهاية المحفوظة لا تسبق آخر دورة. */
+function enoughEnd(details: Record<string, string>): Record<string, string> {
+  const end = roscaParseDate(details[END_KEY])
+  if (!end || !roscaParseDate(details['تاريخ البداية'])) return {}
+  let last: Date | null = null
+  for (const c of roscaPlan(details, memberNames(details)).cycles) if (c.dueDate && (!last || c.dueDate > last)) last = c.dueDate
+  if (!last || !(end < last)) return {}
+  return { [END_KEY]: roscaDate(last) }
+}
+
+function withEvent(details: Record<string, string>, text: string): string {
+  const raw = (details[EVENTS_KEY] ?? '').trim()
+  let list = '[]'
+  if (raw) {
+    try {
+      if (!Array.isArray(JSON.parse(raw))) throw new Error()
+      list = raw
+    } catch {
+      throw new SharedError('تعذّرت قراءة السجل — نفّذ ذلك من التطبيق')
+    }
+  }
+  const body = list.slice(0, list.lastIndexOf(']')).trim()
+  return `${body}${body === '[' ? '' : ','}${JSON.stringify({ t: text, at: stampNow() })}]`
+}
+
+/** تغيير على الجمعية: يُكتب «سجل دورات الجمعية» (وما يلزم) فقط. */
+function mutateRosca(entry: Entry, change: (details: Record<string, string>) => Record<string, string>) {
+  return mutateShared(entry, (details) => {
+    const changed = change(details)
+    return { ...changed, ...enoughEnd({ ...details, ...changed }) }
+  })
+}
+
+function cycleOf(details: Record<string, string>, index: number) {
+  const names = memberNames(details)
+  const plan = roscaPlan(details, names)
+  const cycle = plan.cycles.find((c) => c.index === index)
+  if (!cycle) throw new SharedError('لم تعد هذه الدورة موجودة')
+  return { plan, cycle, names }
+}
+
+/** تسجيل مساهمة عضو في دورة. */
+export async function addRoscaPayment(entry: Entry, index: number, member: string, amount: number, date: string, note: string, receipt = '') {
+  if (!(amount > 0)) throw new SharedError('اكتب مبلغ المساهمة')
+  await mutateRosca(entry, (details) => {
+    const { names } = cycleOf(details, index)
+    if (!names.includes(member)) throw new SharedError('لم يعد هذا العضو في الجمعية')
+    const row = paymentJson({ id: String(Date.now()), member, amount, date, note: note.trim(), receipt })
+    return { [CYCLES_KEY]: withPayments(details, index, [row]) }
+  })
+}
+
+/** «سدّد الجميع»: بقية حصة كل من لم يسدّد في الدورة. يعيد عدد من سُجّلوا. */
+export async function roscaMarkAllPaid(entry: Entry, index: number): Promise<number> {
+  let count = 0
+  await mutateRosca(entry, (details) => {
+    const { plan, cycle, names } = cycleOf(details, index)
+    if (plan.share <= 0) throw new SharedError('حدّد «المساهمة على الشخص» في بيانات تحديد الأدوار أولًا')
+    const now = new Date()
+    const stamp = now.getTime()
+    const rows: Record<string, unknown>[] = []
+    names
+      .filter((m) => !memberPaid(cycle, m))
+      .forEach((m, i) => {
+        const rest = cycleShareOf(cycle, m) - paidBy(cycle, m)
+        if (rest > 0) rows.push(paymentJson({ id: String(stamp + i), member: m, amount: rest, date: roscaDate(now), note: '' }))
+      })
+    if (!rows.length) throw new SharedError('سدّد الجميع حصصهم في هذه الدورة')
+    count = rows.length
+    return { [CYCLES_KEY]: withPayments(details, index, rows) }
+  })
+  return count
+}
+
+/** حذف مساهمة (للمسؤول). */
+export async function deleteRoscaPayment(entry: Entry, index: number, paymentId: string, me: string, myNames: string[]) {
+  await mutateRosca(entry, (details) => {
+    if (!iAmManager(details, me, myNames)) throw new SharedError('هذا الإجراء للمسؤول وحده')
+    const data = cyclesOf(details)
+    const cycle = cycleAt(data, index)
+    const rows = Array.isArray(cycle.payments) ? (cycle.payments as Record<string, unknown>[]) : []
+    const kept = rows.filter((r) => !(r && typeof r === 'object' && String(r.id ?? '') === paymentId))
+    if (kept.length === rows.length) throw new SharedError('لم تعد هذه المساهمة موجودة')
+    cycle.payments = kept
+    data[String(index)] = cycle
+    return { [CYCLES_KEY]: JSON.stringify(data) }
+  })
+}
+
+/** من لم تُسجَّل مساهمته في الدورة (غير صاحب الدور) وما بقي عليه. */
+export function payoutUnpaid(details: Record<string, unknown>, index: number): { member: string; rest: number }[] {
+  const { cycle, names } = cycleOf(asStrings(details), index)
+  return names
+    .filter((m) => m !== cycle.receiver && !memberPaid(cycle, m))
+    .map((m) => ({ member: m, rest: cycleShareOf(cycle, m) - paidBy(cycle, m) }))
+}
+
+/** مبلغ الدورة كاملًا (plan.cycleTotal): ما يستلمه صاحب الدور. */
+export function roscaCycleTotal(details: Record<string, unknown>, index: number): number {
+  const { cycle, names } = cycleOf(asStrings(details), index)
+  return names.reduce((s, m) => s + cycleShareOf(cycle, m), 0)
+}
+
+/**
+  تسليم مبلغ الدورة لصاحب الدور أو إلغاؤه (للمسؤول). [recordUnpaid]: تُسجَّل
+  بقية حصص من لم يسدّد مدفوعةً مع التسليم. [tr] لنص الحدث بلغة الواجهة كما
+  يكتبه التطبيق.
+*/
+export async function roscaTogglePayout(
+  entry: Entry,
+  index: number,
+  opts: { cancel: boolean; recordUnpaid: boolean; me: string; myNames: string[]; currency: string; tr: (s: string) => string },
+) {
+  const { tr } = opts
+  await mutateRosca(entry, (details) => {
+    if (!iAmManager(details, opts.me, opts.myNames)) throw new SharedError('هذا الإجراء للمسؤول وحده')
+    const { cycle, names } = cycleOf(details, index)
+    const paidOut = cycle.payoutDate.trim() !== ''
+    if (opts.cancel !== paidOut) throw new SharedError('تغيّرت حالة الدورة — افتحها من جديد')
+    let base = details
+    const rows: Record<string, unknown>[] = []
+    if (!opts.cancel) {
+      if (!cycle.receiver.trim()) throw new SharedError('حدّد صاحب الدور أولًا')
+      if (opts.recordUnpaid) {
+        const now = new Date()
+        const stamp = now.getTime()
+        names
+          .filter((m) => m !== cycle.receiver && !memberPaid(cycle, m))
+          .forEach((m, i) => {
+            const rest = cycleShareOf(cycle, m) - paidBy(cycle, m)
+            if (rest > 0.01) rows.push(paymentJson({ id: String(stamp + i), member: m, amount: rest, date: roscaDate(now), note: 'سُجِّلت مع تسليم الدورة' }))
+          })
+        if (rows.length) base = { ...details, [CYCLES_KEY]: withPayments(details, index, rows) }
+      }
+    }
+    const data = cyclesOf(base)
+    const at = cycleAt(data, index)
+    at.payout = opts.cancel ? '' : roscaDate(new Date())
+    data[String(index)] = at
+    const totalAmount = names.reduce((s, m) => s + cycleShareOf(cycle, m), 0)
+    const text = opts.cancel
+      ? `${tr('إلغاء تسليم مبلغ الدورة')} ${index}`
+      : `${tr('تسليم')} ${plainMoney(totalAmount, opts.currency)} ${tr('إلى')} ${withoutFnd(cycle.receiver)} — ${tr('الدورة رقم')}: ${index}` +
+        (rows.length ? ` — ${tr('مع تسجيل مساهمة')} ${rows.map((r) => withoutFnd(String(r.member))).join('، ')}` : '')
+    return { [CYCLES_KEY]: JSON.stringify(data), [EVENTS_KEY]: withEvent(details, text) }
+  })
 }

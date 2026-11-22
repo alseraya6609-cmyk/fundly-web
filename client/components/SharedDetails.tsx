@@ -1,10 +1,22 @@
 import { useState, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Check, Handshake, Paperclip, PlusCircle, X } from 'lucide-react'
+import { Check, CheckCheck, Gift, Handshake, Paperclip, PlusCircle, Trash2, Undo2, X } from 'lucide-react'
 import { useStore, type Entry } from '@/lib/data'
 import { errorText } from '@/lib/supabase'
 import { publicName as publicNameOf } from '@/lib/requestsWrite'
-import { SharedError, addContribution, decideLedgerItem, isLumpSum, recordSettlements } from '@/lib/sharedWrite'
+import {
+  SharedError,
+  addContribution,
+  addRoscaPayment,
+  decideLedgerItem,
+  deleteRoscaPayment,
+  isLumpSum,
+  payoutUnpaid,
+  recordSettlements,
+  roscaCycleTotal,
+  roscaMarkAllPaid,
+  roscaTogglePayout,
+} from '@/lib/sharedWrite'
 import { FileError, uploadDeviceFile } from '@/lib/files'
 import { Confirm } from './Confirm'
 import { Sheet } from './ui'
@@ -18,6 +30,8 @@ import {
   budget,
   contributions,
   cycleCollected,
+  cycleComplete,
+  cycleShareOf,
   cycleStatus,
   cycleTarget,
   expenses,
@@ -25,6 +39,8 @@ import {
   hasBudget,
   iAmManager,
   memberNets,
+  memberPaid,
+  paidBy,
   parseMoney,
   memberNames,
   members,
@@ -176,7 +192,17 @@ export function SharedDetails({
         </Block>
       )}
       {isCircle ? (
-        <CircleView details={details} names={names} cur={cur} shown={shown} />
+        <CircleView
+          details={details}
+          names={names}
+          cur={cur}
+          shown={shown}
+          rosca={
+            writable && entry
+              ? { entry, manager, fnd, myNames, currency: String(details['العملة'] ?? '').trim() || currency, onChanged: (m) => onChanged?.(m) }
+              : undefined
+          }
+        />
       ) : (
         <LedgerView
           details={details}
@@ -516,11 +542,57 @@ function DecideButtons({ onApprove, onReject }: { onApprove: () => void; onRejec
   )
 }
 
-function CircleView({ details, names, cur, shown }: { details: Record<string, unknown>; names: string[]; cur: string; shown: (n: string) => string }) {
+type RoscaActions = { entry: Entry; manager: boolean; fnd: string; myNames: string[]; currency: string; onChanged: (message: string) => void }
+
+type RoscaTask =
+  | { kind: 'markAll'; index: number; count: number }
+  | { kind: 'delete'; index: number; id: string; label: string }
+  | { kind: 'cancelPayout'; index: number }
+
+function CircleView({
+  details,
+  names,
+  cur,
+  shown,
+  rosca,
+}: {
+  details: Record<string, unknown>
+  names: string[]
+  cur: string
+  shown: (n: string) => string
+  rosca?: RoscaActions
+}) {
   const { t } = useI18n()
+  const qc = useQueryClient()
+  const [form, setForm] = useState<{ index: number; member?: string; pickCycle: boolean } | null>(null)
+  const [task, setTask] = useState<RoscaTask | null>(null)
+  const [payout, setPayout] = useState<number | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
   const plan = roscaPlan(details, names)
   if (!plan.cycles.length) return null
   const today = startOfToday()
+
+  async function runTask() {
+    if (!rosca || !task) return
+    setBusy(true)
+    setError('')
+    try {
+      if (task.kind === 'markAll') await roscaMarkAllPaid(rosca.entry, task.index)
+      else if (task.kind === 'delete') await deleteRoscaPayment(rosca.entry, task.index, task.id, rosca.fnd, rosca.myNames)
+      else await roscaTogglePayout(rosca.entry, task.index, { cancel: true, recordUnpaid: false, me: rosca.fnd, myNames: rosca.myNames, currency: rosca.currency, tr: t })
+      await qc.invalidateQueries({ queryKey: ['shared'] })
+      rosca.onChanged(task.kind === 'markAll' ? 'تم تسجيل سداد الجميع بنجاح' : task.kind === 'delete' ? 'تم حذف المساهمة بنجاح' : 'تم تحديث تسليم الدورة بنجاح')
+      setTask(null)
+    } catch (e) {
+      setError(e instanceof SharedError ? e.message : errorText(e) || 'تعذّر الحفظ. حاول مرة أخرى.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const smallButton = 'flex h-10 flex-1 items-center justify-center gap-1.5 rounded-field text-[12.5px] font-extrabold disabled:opacity-50'
+  const wideButton = 'flex h-10 w-full items-center justify-center gap-1.5 rounded-field text-[12.5px] font-extrabold'
   return (
     <>
       <div className="mt-5 grid grid-cols-2 gap-2">
@@ -532,6 +604,16 @@ function CircleView({ details, names, cur, shown }: { details: Record<string, un
           value={plan.current ? shown(plan.current.receiver) || '—' : '—'}
         />
       </div>
+      {rosca && (
+        <button
+          type="button"
+          onClick={() => setForm({ index: plan.current?.index ?? 1, pickCycle: true })}
+          className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-field bg-brand text-[13.5px] font-extrabold text-white hover:bg-brand-dark"
+        >
+          <PlusCircle className="size-4" />
+          {t('تسجيل مساهمة')}
+        </button>
+      )}
       <Block title="الدورات" count={plan.cycles.length}>
         {plan.cycles.map((c) => {
           const status = cycleStatus(plan, c, today)
@@ -561,15 +643,401 @@ function CircleView({ details, names, cur, shown }: { details: Record<string, un
                       <span className="text-muted">{p.date}</span>
                       <span className="font-bold text-brand">{money(p.amount, cur)}</span>
                       {p.receipt && <FileButton file={{ localPath: p.receipt }} label="الإيصال" />}
+                      {rosca?.manager && (
+                        <button
+                          type="button"
+                          aria-label={t('حذف المساهمة')}
+                          onClick={() => {
+                            setError('')
+                            setTask({ kind: 'delete', index: c.index, id: p.id, label: `${shown(p.member)} · ${money(p.amount, cur)}` })
+                          }}
+                          className="grid size-7 place-items-center rounded-inner text-danger hover:bg-danger-soft"
+                        >
+                          <Trash2 className="size-3.5" />
+                        </button>
+                      )}
                     </div>
                   ))}
+                </div>
+              )}
+              {rosca && (
+                <div className="mt-2 flex flex-col gap-1 border-t border-line pt-2">
+                  {names.map((n) => (
+                    <div key={n} className="flex flex-wrap items-center justify-between gap-2 text-[12px]">
+                      <span className="flex items-center gap-1.5 font-bold text-ink">
+                        {shown(n)}
+                        {c.receiver === n && <span className="rounded-full bg-gold-soft px-2 py-0.5 text-[10px] font-extrabold text-gold-dark">{t('صاحب الدور')}</span>}
+                      </span>
+                      {memberPaid(c, n) ? (
+                        <span className="font-extrabold text-brand-mid">{money(paidBy(c, n), cur)}</span>
+                      ) : (
+                        <button type="button" onClick={() => setForm({ index: c.index, member: n, pickCycle: false })} className="h-7 rounded-inner px-2 text-[12px] font-extrabold text-brand hover:bg-brand-soft">
+                          {t('تسجيل دفع')}
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  <div className="mt-1.5 flex gap-2">
+                    <button type="button" onClick={() => setForm({ index: c.index, pickCycle: false })} className={`${smallButton} bg-brand text-white hover:bg-brand-dark`}>
+                      <PlusCircle className="size-4" />
+                      {t('تسجيل مساهمة')}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={names.every((n) => memberPaid(c, n))}
+                      onClick={() => {
+                        setError('')
+                        setTask({ kind: 'markAll', index: c.index, count: names.filter((n) => !memberPaid(c, n)).length })
+                      }}
+                      className={`${smallButton} border border-hairline bg-white text-title hover:bg-surface`}
+                    >
+                      <CheckCheck className="size-4" />
+                      {t('سدّد الجميع')}
+                    </button>
+                  </div>
+                  {rosca.manager &&
+                    (c.payoutDate ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setError('')
+                          setTask({ kind: 'cancelPayout', index: c.index })
+                        }}
+                        className={`${wideButton} mt-1 border border-hairline bg-white text-danger hover:bg-danger-soft`}
+                      >
+                        <Undo2 className="size-4" />
+                        {t('إلغاء التسليم')}
+                      </button>
+                    ) : (
+                      <button type="button" onClick={() => setPayout(c.index)} className={`${wideButton} mt-1 bg-brand-mid text-white hover:bg-brand`}>
+                        <Gift className="size-4" />
+                        {t('تسليم المبلغ لصاحب الدور')}
+                      </button>
+                    ))}
                 </div>
               )}
             </details>
           )
         })}
       </Block>
+      {rosca && form && (
+        <RoscaPaymentForm
+          entry={rosca.entry}
+          details={details}
+          names={names}
+          cur={cur}
+          shown={shown}
+          startIndex={form.index}
+          member={form.member}
+          pickCycle={form.pickCycle}
+          onClose={() => setForm(null)}
+          onDone={(message) => {
+            setForm(null)
+            rosca.onChanged(message)
+          }}
+        />
+      )}
+      {rosca && payout !== null && (
+        <PayoutDialog
+          rosca={rosca}
+          details={details}
+          index={payout}
+          cur={cur}
+          shown={shown}
+          onClose={() => setPayout(null)}
+          onDone={(message) => {
+            setPayout(null)
+            rosca.onChanged(message)
+          }}
+        />
+      )}
+      <Confirm
+        open={!!task}
+        title={task?.kind === 'markAll' ? 'تسجيل سداد الجميع' : task?.kind === 'delete' ? 'حذف المساهمة' : 'إلغاء التسليم'}
+        message={
+          task?.kind === 'markAll'
+            ? `${t('سيُسجَّل')} ${task.count} ${t('عضوًا كمن سدّدوا حصتهم في الدورة')} ${task.index}.`
+            : task?.kind === 'delete'
+              ? `${t('سيُحذف سداد')} ${task.label} ${t('من الدورة')} ${task.index}.`
+              : `${t('سيُلغى تسجيل تسليم مبلغ الدورة')} ${task?.index ?? ''}.`
+        }
+        confirmLabel={task?.kind === 'markAll' ? 'تسجيل' : task?.kind === 'delete' ? 'حذف' : 'إلغاء التسليم'}
+        danger={task?.kind !== 'markAll'}
+        busy={busy}
+        error={error}
+        onConfirm={runTask}
+        onCancel={() => setTask(null)}
+      />
     </>
+  )
+}
+
+const restText = (v: number) => (v > 0 ? v.toFixed(v % 1 === 0 ? 0 : 2) : '')
+
+/** _openRoscaPaymentForm: مساهمة عضو في دورة (يختارها عند الإضافة العامة). */
+function RoscaPaymentForm({
+  entry,
+  details,
+  names,
+  cur,
+  shown,
+  startIndex,
+  member,
+  pickCycle,
+  onClose,
+  onDone,
+}: {
+  entry: Entry
+  details: Record<string, unknown>
+  names: string[]
+  cur: string
+  shown: (n: string) => string
+  startIndex: number
+  member?: string
+  pickCycle: boolean
+  onClose: () => void
+  onDone: (message: string) => void
+}) {
+  const { t } = useI18n()
+  const qc = useQueryClient()
+  const plan = roscaPlan(details, names)
+  const cycleAt = (i: number) => plan.cycles.find((c) => c.index === i)
+  const restOf = (i: number, n: string) => {
+    const c = cycleAt(i)
+    return c ? cycleShareOf(c, n) - paidBy(c, n) : plan.share
+  }
+  const first = cycleAt(startIndex)
+  const unpaid = first ? names.filter((n) => !memberPaid(first, n)) : names
+  const now = new Date()
+  const [index, setIndex] = useState(startIndex)
+  const [payer, setPayer] = useState(member ?? unpaid[0] ?? names[0] ?? '')
+  const [amountText, setAmountText] = useState(() => restText(restOf(startIndex, member ?? unpaid[0] ?? names[0] ?? '')))
+  const [dateValue, setDateValue] = useState(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`)
+  const [note, setNote] = useState('')
+  const [file, setFile] = useState<File | null>(null)
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const amount = parseMoney(amountText)
+  const [y, m, d] = dateValue.split('-').map((x) => parseInt(x, 10))
+  const dmy = dateValue ? `${d}/${m}/${y}` : `${now.getDate()}/${now.getMonth() + 1}/${now.getFullYear()}`
+  const fieldClass = 'h-12 w-full rounded-field border border-line bg-field px-3 text-[13.5px] font-bold text-title outline-none focus:border-gold'
+  const chip = (on: boolean) => `h-9 rounded-full px-3 text-[12px] font-bold ${on ? 'bg-brand-soft text-brand' : 'bg-field text-sub'}`
+  const current = cycleAt(index)
+
+  async function save() {
+    setBusy(true)
+    setError('')
+    try {
+      const receipt = file ? await uploadDeviceFile(file) : ''
+      await addRoscaPayment(entry, index, payer, amount, dmy, note, receipt)
+      await qc.invalidateQueries({ queryKey: ['shared'] })
+      setConfirming(false)
+      onDone('تم تسجيل المساهمة بنجاح')
+    } catch (e) {
+      setError(e instanceof SharedError || e instanceof FileError ? e.message : errorText(e) || 'تعذّر الحفظ. حاول مرة أخرى.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Sheet open onClose={onClose}>
+      <p className="text-[18px] font-extrabold text-title">
+        {t('تسجيل مساهمة')} — {t('الدورة')} {index}
+      </p>
+      {pickCycle && (
+        <>
+          <p className="mb-1.5 mt-4 text-[12px] font-extrabold text-title">{t('لأي دورة هذا الدفع؟ *')}</p>
+          <div className="flex flex-wrap gap-2">
+            {plan.cycles.map((c) => (
+              <button
+                key={c.index}
+                type="button"
+                onClick={() => {
+                  setIndex(c.index)
+                  setAmountText(restText(restOf(c.index, payer)))
+                }}
+                className={chip(index === c.index)}
+              >
+                {t('الدورة')} {c.index}
+                {c.receiver.trim() ? ` — ${shown(c.receiver)}` : ''}
+                {c.payoutDate || cycleComplete(c) ? ' ✓' : ''}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+      <p className="mb-1.5 mt-4 text-[12px] font-extrabold text-title">{t('من العضو؟')}</p>
+      <div className="flex flex-wrap gap-2">
+        {names.map((n) => (
+          <button
+            key={n}
+            type="button"
+            onClick={() => {
+              setPayer(n)
+              setAmountText(restText(restOf(index, n)))
+            }}
+            className={chip(payer === n)}
+          >
+            {shown(n)}
+            {current && memberPaid(current, n) ? ' ✓' : ''}
+          </button>
+        ))}
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-3">
+        <label className="flex flex-col gap-1">
+          <span className="text-[12px] font-bold text-sub">
+            {t('المبلغ')} * ({t(cur)})
+          </span>
+          <input dir="ltr" inputMode="decimal" value={amountText} onChange={(e) => setAmountText(e.target.value)} className={fieldClass} />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-[12px] font-bold text-sub">{t('التاريخ')}</span>
+          <input type="date" value={dateValue} onChange={(e) => setDateValue(e.target.value)} className={fieldClass} />
+        </label>
+        <label className="col-span-2 flex flex-col gap-1">
+          <span className="text-[12px] font-bold text-sub">{t('ملاحظة')}</span>
+          <textarea rows={2} dir="auto" value={note} onChange={(e) => setNote(e.target.value)} className={`${fieldClass} h-auto py-3`} />
+        </label>
+        <div className="col-span-2">
+          <ReceiptPicker file={file} onChange={setFile} label="إرفاق مستند" />
+        </div>
+      </div>
+      {error && !confirming && <p className="mt-3 rounded-inner bg-danger-soft px-3 py-2 text-[12px] font-bold text-danger">{t(error)}</p>}
+      <button
+        type="button"
+        onClick={() => {
+          if (amount <= 0) {
+            setError('اكتب مبلغ المساهمة')
+            return
+          }
+          setError('')
+          setConfirming(true)
+        }}
+        className="mt-5 flex h-13 w-full items-center justify-center rounded-field bg-brand py-3.5 text-[15px] font-extrabold text-white hover:bg-brand-dark"
+      >
+        {t('حفظ المساهمة')}
+      </button>
+      <Confirm
+        open={confirming}
+        title="تأكيد"
+        message={`${shown(payer)} · ${money(amount, cur)} · ${t('الدورة')} ${index} — ${t('هل تريد تسجيل المساهمة؟')}`}
+        busy={busy}
+        error={error}
+        onConfirm={save}
+        onCancel={() => setConfirming(false)}
+      />
+    </Sheet>
+  )
+}
+
+/**
+  _roscaTogglePayout و _roscaPayoutUnpaidChoice: تسليم مبلغ الدورة لصاحب
+  الدور. إن بقي من لم يسدّد: تسجيل مساهماتهم مع التسليم، أو التسليم مع
+  بقاء ما عليهم.
+*/
+function PayoutDialog({
+  rosca,
+  details,
+  index,
+  cur,
+  shown,
+  onClose,
+  onDone,
+}: {
+  rosca: RoscaActions
+  details: Record<string, unknown>
+  index: number
+  cur: string
+  shown: (n: string) => string
+  onClose: () => void
+  onDone: (message: string) => void
+}) {
+  const { t } = useI18n()
+  const qc = useQueryClient()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const plan = roscaPlan(details, memberNames(details))
+  const cycle = plan.cycles.find((c) => c.index === index)
+  let unpaid: { member: string; rest: number }[] = []
+  let totalAmount = 0
+  try {
+    unpaid = payoutUnpaid(details, index)
+    totalAmount = roscaCycleTotal(details, index)
+  } catch {
+    // الدورة لم تعد موجودة: يظهر الخطأ عند الحفظ.
+  }
+  const now = new Date()
+  const noReceiver = !cycle?.receiver.trim()
+
+  async function go(recordUnpaid: boolean) {
+    setBusy(true)
+    setError('')
+    try {
+      await roscaTogglePayout(rosca.entry, index, { cancel: false, recordUnpaid, me: rosca.fnd, myNames: rosca.myNames, currency: rosca.currency, tr: t })
+      await qc.invalidateQueries({ queryKey: ['shared'] })
+      onDone('تم تحديث تسليم الدورة بنجاح')
+    } catch (e) {
+      setError(e instanceof SharedError ? e.message : errorText(e) || 'تعذّر الحفظ. حاول مرة أخرى.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const button = 'flex h-11 w-full items-center justify-center rounded-field text-[13.5px] font-extrabold disabled:opacity-60'
+  return (
+    <div className="fixed inset-0 z-[60] grid place-items-center bg-brand-deep/40 p-4" onClick={busy ? undefined : onClose}>
+      <div role="alertdialog" aria-modal="true" onClick={(e) => e.stopPropagation()} className="w-full max-w-sm rounded-card bg-white p-5 shadow-2xl">
+        <p className="text-[17px] font-extrabold text-title">{t('تسليم المبلغ')}</p>
+        {noReceiver ? (
+          <p className="mt-2 text-[13px] text-sub">{t('حدّد صاحب الدور أولًا')}</p>
+        ) : (
+          <div dir="auto" className="mt-2 text-[13px] leading-relaxed text-sub">
+            <p>
+              {t('سيتم تسجيل استلام')} {money(totalAmount, cur)} {t('إلى')} {shown(cycle?.receiver ?? '')}
+            </p>
+            <p>
+              {t('الدورة رقم')}: {index}
+            </p>
+            <p>
+              {t('تاريخ استلام المبلغ')}: {`${now.getDate()}/${now.getMonth() + 1}/${now.getFullYear()}`}
+            </p>
+            {unpaid.length > 0 && (
+              <>
+                <p className="mt-3 font-extrabold text-title">{t('لم تُسجَّل مساهمة هؤلاء في هذه الدورة:')}</p>
+                {unpaid.map((u) => (
+                  <p key={u.member}>
+                    • {shown(u.member)}: {money(u.rest, cur)}
+                  </p>
+                ))}
+              </>
+            )}
+          </div>
+        )}
+        {error && <p className="mt-3 rounded-inner bg-danger-soft px-3 py-2 text-[12px] font-bold text-danger">{t(error)}</p>}
+        <div className="mt-5 flex flex-col gap-2">
+          {!noReceiver &&
+            (unpaid.length === 0 ? (
+              <button type="button" disabled={busy} onClick={() => go(false)} className={`${button} bg-brand text-white hover:bg-brand-dark`}>
+                {t('تأكيد التسليم')}
+              </button>
+            ) : (
+              <>
+                <button type="button" disabled={busy} onClick={() => go(true)} className={`${button} bg-brand text-white hover:bg-brand-dark`}>
+                  {t('تسجيل مساهماتهم والتسليم')}
+                </button>
+                <button type="button" disabled={busy} onClick={() => go(false)} className={`${button} border border-brand text-brand hover:bg-brand-soft`}>
+                  {t('تسليم مع بقاء ما عليهم')}
+                </button>
+              </>
+            ))}
+          <button type="button" disabled={busy} onClick={onClose} className={`${button} bg-surface font-bold text-body hover:bg-line`}>
+            {t('إلغاء')}
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 
