@@ -24,6 +24,8 @@ import { unitIcon } from '@/components/PropertyParts'
 import { PROPERTY_TYPE_KEY, archiveUnit, decodeUnits, toggleUnitFreeze, unitHasOpenContract, unitInfoRows, unitIsLive, unitKey, type PropertyUnit } from '@/lib/propertyWrite'
 import { LeaseForm, type Renewal } from '@/components/LeaseForm'
 import { CancelContractFlow, UnitLeaseBox, currentContract } from '@/components/UnitLease'
+import { contractClosed } from '@/lib/leaseActions'
+import { ACTIVITY_TYPES } from '@/lib/lease'
 import { splitLogs as splitAssetLogs } from '@/lib/vehicleWrite'
 
 // أسماء الفئات في لوحة التحكم (VISIBILITY_PAGES ← assets).
@@ -63,6 +65,8 @@ export default function Assets() {
   const [vehicle, setVehicle] = useState<{ vehicleClass: string; vehicleType: string; asset?: Asset } | null>(null)
   const canAddVehicle = groups.some((g) => g.key === 'equipment')
   const canAddProperty = groups.some((g) => g.key === 'real_estate')
+  const canAddActivity = groups.some((g) => g.key === 'activity')
+  const [addingActivity, setAddingActivity] = useState(false)
   const [addingProperty, setAddingProperty] = useState(false)
   const [editing, setEditing] = useState<{ asset: Asset; type?: string; focusKey?: string } | null>(null)
 
@@ -89,14 +93,20 @@ export default function Assets() {
           {t(notice)}
         </p>
       )}
-      <div className="flex items-center gap-2">
-        <div className="min-w-0 flex-1">
+      <div className="flex flex-wrap items-center gap-x-2">
+        <div className="min-w-[220px] flex-1">
           <SearchField value={search} onChange={setSearch} placeholder="بحث" />
         </div>
         {canAddProperty && (
           <button type="button" onClick={() => setAddingProperty(true)} className="mb-3 flex h-11 shrink-0 items-center gap-1 rounded-inner bg-brand px-3 text-[12.5px] font-extrabold text-white hover:bg-brand-dark">
             <Plus className="size-4" />
             {t('إضافة عقار')}
+          </button>
+        )}
+        {canAddActivity && (
+          <button type="button" onClick={() => setAddingActivity(true)} className="mb-3 flex h-11 shrink-0 items-center gap-1 rounded-inner bg-brand px-3 text-[12.5px] font-extrabold text-white hover:bg-brand-dark">
+            <Plus className="size-4" />
+            {t('إضافة نشاط')}
           </button>
         )}
         {canAddVehicle && (
@@ -202,6 +212,18 @@ export default function Assets() {
           </div>
         )}
       </Sheet>
+      {addingActivity && (
+        <LeaseForm
+          propertyType=""
+          activity={{ classOptions: ACTIVITY_TYPES.filter((x) => !hidden.has(`item:assets:الأنشطة التجارية:${x}`)) }}
+          onClose={() => setAddingActivity(false)}
+          onDone={(m) => {
+            setAddingActivity(false)
+            setFilter('activity')
+            flash(m)
+          }}
+        />
+      )}
       {addingProperty && (
         <PropertyWizard
           onClose={() => setAddingProperty(false)}
@@ -524,7 +546,9 @@ function AssetUnits({ asset, onEditUnit, onDone }: { asset: Asset; onEditUnit: (
   const units = decodeUnits(asset.units_json).filter(unitIsLive)
   const [unit, setUnit] = useState<PropertyUnit | null>(null)
   const [adding, setAdding] = useState<'units' | 'facilities' | null>(null)
-  const [leasing, setLeasing] = useState<{ unit: PropertyUnit; existing?: UnitContract; renewal?: Renewal } | null>(null)
+  const [leasing, setLeasing] = useState<{ unit?: PropertyUnit; existing?: UnitContract; renewal?: Renewal; multi?: { key: string; name: string }[] } | null>(null)
+  const allContracts = useUnitContracts()
+  const [multiError, setMultiError] = useState('')
   const property = asset.category === 'real_estate'
   const editable = property && !isCancelledAsset(asset) && asset.status !== ARCHIVED
   const annexes = Object.entries((asset.annexes ?? {}) as Record<string, unknown>).filter(([, v]) => Number(v) > 0)
@@ -545,6 +569,7 @@ function AssetUnits({ asset, onEditUnit, onDone }: { asset: Asset; onEditUnit: (
           </button>
         )}
       </div>
+      {multiError && <p className="mb-2 rounded-inner bg-danger-soft px-3 py-2 text-[12px] font-bold text-danger">{t(multiError)}</p>}
       {statuses.length > 1 && <p className="mb-2 text-[12px] text-sub">{statuses.map((st) => `${t(st)}: ${units.filter((u) => u.status === st).length}`).join(' · ')}</p>}
       {units.length > 0 && (
         <div className="grid grid-cols-2 gap-2 rounded-inner bg-surface p-2 sm:grid-cols-3">
@@ -607,6 +632,17 @@ function AssetUnits({ asset, onEditUnit, onDone }: { asset: Asset; onEditUnit: (
             setLeasing({ unit, renewal })
             setUnit(null)
           }}
+          onMulti={
+            units.length > 1
+              ? () => {
+                  // _openMultiUnitContractForm: الوحدات بلا عقد قائم.
+                  const vacant = units.filter((u) => !(allContracts.data ?? []).some((c) => c.asset_id === asset.id && c.unit_key === unitKey(u) && !contractClosed(c)))
+                  setUnit(null)
+                  if (vacant.length < 2) setMultiError('يلزم وجود وحدتين شاغرتين على الأقل لإنشاء عقد متعدد الوحدات')
+                  else (setMultiError(''), setLeasing({ multi: vacant.map((u) => ({ key: unitKey(u), name: u.name })) }))
+                }
+              : undefined
+          }
           onDone={(m) => {
             setUnit(null)
             onDone(m)
@@ -618,6 +654,7 @@ function AssetUnits({ asset, onEditUnit, onDone }: { asset: Asset; onEditUnit: (
         <LeaseForm
           asset={asset}
           unit={leasing.unit}
+          multi={leasing.multi}
           propertyType={splitAssetLogs(asset.logs_json).meta[PROPERTY_TYPE_KEY] ?? ''}
           existing={leasing.existing}
           renewal={leasing.renewal}
@@ -641,6 +678,7 @@ function UnitSheet({
   onEdit,
   onLease,
   onRenew,
+  onMulti,
   onDone,
 }: {
   asset: Asset
@@ -650,6 +688,7 @@ function UnitSheet({
   onEdit: () => void
   onLease: (existing?: UnitContract) => void
   onRenew: (contract: UnitContract, renewal: Renewal) => void
+  onMulti?: () => void
   onDone: (m: string) => void
 }) {
   const { t } = useI18n()
@@ -712,7 +751,7 @@ function UnitSheet({
         </div>
       )}
       {error && !archiving && <p className="mt-3 rounded-inner bg-danger-soft px-3 py-2 text-[12px] font-bold text-danger">{t(error)}</p>}
-      <UnitLeaseBox asset={asset} unit={unit} editable={editable} onLease={onLease} onRenew={onRenew} onDone={onDone} />
+      <UnitLeaseBox asset={asset} unit={unit} editable={editable} onLease={onLease} onRenew={onRenew} onMulti={onMulti} onDone={onDone} />
       {cancelFirst && contract && (
         <CancelContractFlow
           asset={asset}

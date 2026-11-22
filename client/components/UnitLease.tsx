@@ -52,6 +52,7 @@ export function UnitLeaseBox({
   editable,
   onLease,
   onRenew,
+  onMulti,
   onDone,
 }: {
   asset: Asset
@@ -59,6 +60,8 @@ export function UnitLeaseBox({
   editable: boolean
   onLease: (existing?: UnitContract) => void
   onRenew: (contract: UnitContract, renewal: Renewal) => void
+  /** عقار بأكثر من وحدة: «نوع العقد» (لهذه الوحدة أو متعدد الوحدات). */
+  onMulti?: () => void
   onDone: (message: string) => void
 }) {
   const { t } = useI18n()
@@ -75,6 +78,7 @@ export function UnitLeaseBox({
   const [paying, setPaying] = useState<UnitPayment | null>(null)
   const [editingPay, setEditingPay] = useState<{ existing: UnitPayment | null } | null>(null)
   const [notice, setNotice] = useState('')
+  const [choosing, setChoosing] = useState(false)
   const flash = (m: string) => {
     setNotice(m)
     window.setTimeout(() => setNotice(''), 4000)
@@ -100,7 +104,7 @@ export function UnitLeaseBox({
           {t('إدارة الإيجار')}
         </p>
         {editable && !contract && (
-          <button type="button" onClick={() => (setError(''), blocked() ? setError(blockedMessage) : onLease())} className="flex items-center gap-1 rounded-full bg-brand px-3 py-1.5 text-[12px] font-extrabold text-white">
+          <button type="button" onClick={() => (setError(''), blocked() ? setError(blockedMessage) : onMulti ? setChoosing(true) : onLease())} className="flex items-center gap-1 rounded-full bg-brand px-3 py-1.5 text-[12px] font-extrabold text-white">
             <Plus className="size-4" />
             {t('تأجير الوحدة')}
           </button>
@@ -213,6 +217,21 @@ export function UnitLeaseBox({
         </>
       )}
 
+      {choosing && (
+        <Sheet open onClose={() => setChoosing(false)}>
+          <p className="text-[17px] font-extrabold text-title">{t('نوع العقد')}</p>
+          <div className="mt-3 flex flex-col gap-2">
+            <button type="button" onClick={() => (setChoosing(false), onLease())} className="rounded-inner border border-line px-4 py-3 text-start hover:border-brand">
+              <p className="text-[14px] font-extrabold text-title">{t('عقد إيجار لهذه الوحدة')}</p>
+              <p className="text-[11.5px] text-sub">{t('بيانات العقد والعقار والمؤجر والمستأجر والدفعات')}</p>
+            </button>
+            <button type="button" onClick={() => (setChoosing(false), onMulti?.())} className="rounded-inner border border-line px-4 py-3 text-start hover:border-brand">
+              <p className="text-[14px] font-extrabold text-title">{t('عقد متعدد الوحدات')}</p>
+              <p className="text-[11.5px] text-sub">{t('عقد واحد يشمل هذه الوحدة ووحدات أخرى من العقار')}</p>
+            </button>
+          </div>
+        </Sheet>
+      )}
       {extending && contract && (
         <ExtendFlow
           contract={contract}

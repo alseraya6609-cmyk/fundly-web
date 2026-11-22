@@ -17,6 +17,13 @@ import { uid } from './vehicleWrite'
 
 export type Row = Record<string, string>
 
+const K_TERM = 'نمط مدة الإيجار'
+const K_START = 'تاريخ بداية العقد'
+const K_END = 'تاريخ نهاية العقد'
+const K_TRADE = 'الاسم التجاري'
+const K_LIC_ISSUE = 'تاريخ إصدار الرخصة'
+const K_LIC_END = 'تاريخ انتهاء الرخصة'
+
 export type Lease = {
   contract: Row
   property: Row
@@ -81,7 +88,60 @@ export const K = {
   rowId: '__rid',
   subject: 'محل العقد',
   attachedDocs: 'المستندات المرفقة',
+  purpose: 'الغرض من الإيجار',
+  tenantClass: 'تصنيف المستأجر',
+  tradeName: 'الاسم التجاري',
+  activityClass: 'تصنيف النشاط',
+  legalForm: 'الشكل القانوني',
+  licenseNo: 'رقم الرخصة التجارية',
+  licenseIssue: 'تاريخ إصدار الرخصة',
+  licenseEnd: 'تاريخ انتهاء الرخصة',
+  licenseReminder: 'تذكير انتهاء الرخصة',
+  licenseReminderDays: 'أيام تذكير الرخصة',
+  licenseClass: 'فئة الرخصة',
+  chamber: 'عضوية الغرفة',
+  activities: 'الأنشطة التجارية',
+  capital: 'رأس المال',
+  leaseReminder: 'تذكير نهاية العقد',
+  leaseReminderDays: 'أيام تذكير نهاية العقد',
+  activityLocation: 'موقع النشاط',
 } as const
+
+/* ===== عقد إيجار النشاط التجاري ===== */
+export const PURPOSES = ['تجاري', 'سكني', 'صناعي', 'مستودع', 'زراعي', 'أخرى']
+export const ACTIVITY_REMINDERS = ['بلا تذكير', 'قبل أسبوعين', 'قبل شهر', 'قبل شهرين', 'مخصص']
+export const LEGAL_FORMS = ['مؤسسة فردية', 'شركة ذات مسؤولية محدودة', 'شركة مساهمة', 'شركة تضامن', 'فرع شركة', 'أخرى']
+export const LICENSE_CLASSES = ['تاجر', 'وطني']
+export const ACTIVITY_TYPES = ['الخدمات', 'الأنشطة الفورية', 'زراعية', 'التكنولوجيا', 'الحرفية', 'المقاولات', 'المهنية', 'تجارة واستثمار', 'أخرى']
+
+/** activityRequired */
+export const ACTIVITY_REQUIRED: Record<string, string[]> = {
+  contract: [K_TERM, K_START, K_END],
+  license: [K_TRADE, K_LIC_ISSUE, K_LIC_END],
+  lessor: ['الإسم', 'رقم الهوية', 'تاريخ انتهاء الهوية', 'صادرة من', 'رقم الهاتف'],
+  tenant: ['الإسم', 'رقم الهوية', 'تاريخ انتهاء الهوية', 'صادرة من', 'رقم الهاتف'],
+}
+
+/** _activityMissing: «الحقل (القسم)». */
+export function activityMissing(l: Lease): string[] {
+  const sections: Record<string, string> = { contract: 'عقد الإيجار', license: 'الرخصة', lessor: 'المؤجر', tenant: 'المستأجر' }
+  const labels: Record<string, string> = {
+    [K_TERM]: 'نمط مدة الإيجار',
+    [K_START]: 'تاريخ بداية العقد',
+    [K_END]: 'تاريخ نهاية العقد',
+    [K_TRADE]: 'الاسم التجاري',
+    [K_LIC_ISSUE]: 'تاريخ الإصدار',
+    [K_LIC_END]: 'تاريخ الانتهاء',
+    'الإسم': 'الإسم',
+    'رقم الهاتف': 'رقم الهاتف',
+  }
+  const out: string[] = []
+  for (const [scope, section] of Object.entries(sections)) {
+    const store = (l as unknown as Record<string, Row>)[scope]
+    for (const key of ACTIVITY_REQUIRED[scope]) if (!(store[key] ?? '').trim()) out.push(`${labels[key] ?? key} (${section})`)
+  }
+  return out
+}
 
 export const TERM_MODES = ['يومي', 'شهري', 'سنوي', 'مخصص']
 export const LESSOR_CAPACITIES = ['مالك', 'مستثمر']
@@ -262,8 +322,10 @@ export function mergeMobileIntoPhone(store: Row) {
     return
   }
   const phone = (store[K.phone] ?? '').trim()
-  if (!phone || phone === mobile) store[K.phone] = mobile
-  delete store[K.mobile]
+  if (!phone || phone === mobile) {
+    store[K.phone] = mobile
+    delete store[K.mobile]
+  }
 }
 
 export const emptyLease = (): Lease => ({ contract: {}, property: {}, lessor: {}, tenant: {}, representative: {}, license: {}, deposits: [], payments: [], adminFees: [], note: '' })
@@ -511,6 +573,9 @@ export function shareText(l: Lease): string {
   delete contract[K.subject]
   delete contract[K.paymentsNote]
   section('بيانات عقد الإيجار', contract)
+  const license = { ...l.license }
+  for (const key of [K.licenseReminder, K.licenseReminderDays, K.leaseReminder, K.leaseReminderDays]) delete license[key]
+  section('بيانات الرخصة', license)
   section('بيانات العقار', l.property)
   section('بيانات المؤجر', l.lessor)
   section('بيانات المستأجر', l.tenant)
@@ -799,8 +864,12 @@ export async function saveUnitLease(args: {
   unitName: string
   propertyTitle: string
   existing?: UnitContract
+  /** عقد متعدد الوحدات: كل الوحدات المختارة بترتيبها (الأولى تحمل الدفعات). */
+  multi?: { key: string; name: string }[]
+  /** «عقد إيجار النشاط — …» مصدر الأفراد والجهات. */
+  peopleSource?: string
 }): Promise<{ saved: UnitContract; paymentsIssue?: string }> {
-  const { lease, draft, assetId, unitKey, unitName, propertyTitle, existing } = args
+  const { lease, draft, assetId, unitKey, unitName, propertyTitle, existing, multi } = args
   const user = await uid()
   const tenantName = (lease.tenant[K.name] ?? '').trim()
   ensureRowIds(lease)
@@ -824,18 +893,43 @@ export async function saveUnitLease(args: {
     notes: encodeLease(lease),
     group_key: (existing as (UnitContract & { group_key?: string | null }) | undefined)?.group_key ?? null,
   }
-  const res = existing ? await supabase.from('property_unit_contracts').update(row).eq('id', existing.id).select('*').single() : await supabase.from('property_unit_contracts').insert(row).select('*').single()
-  if (res.error) throw res.error
-  const saved = { ...row, ...(res.data as object) } as unknown as UnitContract
+  let saved: UnitContract
+  if (multi && !existing) {
+    // _save: عقد لكل وحدة بنفس المجموعة، والإيجار موزّع بالتساوي، والدفعات
+    // والرسوم والتأمين على الأولى وحدها.
+    const groupKey = `grp_${Date.now() * 1000}`
+    const share = value / multi.length
+    let primary: UnitContract | null = null
+    for (let i = 0; i < multi.length; i++) {
+      let notes = row.notes
+      if (i > 0) {
+        const copy = decodeLease(encodeLease(lease))
+        copy.payments = []
+        copy.adminFees = []
+        copy.deposits = []
+        copy.contract[K.multiPrimary] = multi[0].name
+        notes = encodeLease(copy)
+      }
+      const one = { ...row, unit_key: multi[i].key, unit_name: multi[i].name, lease_type: 'multi_unit', group_key: groupKey, annual_rent: share, notes }
+      const r = await supabase.from('property_unit_contracts').insert(one).select('*').single()
+      if (r.error) throw r.error
+      primary ??= { ...one, ...(r.data as object) } as unknown as UnitContract
+    }
+    saved = primary!
+  } else {
+    const res = existing ? await supabase.from('property_unit_contracts').update(row).eq('id', existing.id).select('*').single() : await supabase.from('property_unit_contracts').insert(row).select('*').single()
+    if (res.error) throw res.error
+    saved = { ...row, ...(res.data as object) } as unknown as UnitContract
+  }
   if (!saved.id) throw new AssetError('تعذّر حفظ العقد')
-  await leaseReminders(lease, unitName, tenantName)
+  await leaseReminders(lease, unitName || propertyTitle, tenantName)
   let paymentsIssue: string | undefined
   try {
     await syncLeasePayments(saved)
   } catch (e) {
     paymentsIssue = String((e as { message?: string }).message ?? e)
   }
-  await syncLeasePeople(lease, `عقد إيجار ${unitName} — ${propertyTitle}`).catch(() => {})
+  await syncLeasePeople(lease, args.peopleSource ?? `عقد إيجار ${unitName} — ${propertyTitle}`).catch(() => {})
   return { saved, paymentsIssue }
 }
 

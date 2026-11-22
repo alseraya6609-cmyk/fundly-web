@@ -3,12 +3,20 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Calculator, CheckSquare, Edit3, FileText, Landmark, Loader2, Pencil, Plus, Shield, Square, Trash2, User, Users, Wand2, X } from 'lucide-react'
 import { cn } from '@/lib/format'
 import { useI18n } from '@/lib/i18n'
-import { usePeopleAll, useStore, useUnitContracts, type Asset, type UnitContract } from '@/lib/data'
+import { useCurrency, usePeopleAll, useStore, useUnitContracts, type Asset, type UnitContract } from '@/lib/data'
+import { ACTIVITY_UNIT_KEY, activityMetaFromLease, activityReminders, createActivityAsset, mergeActivityMeta } from '@/lib/activityWrite'
 import { errorText } from '@/lib/supabase'
 import { AssetError } from '@/lib/assetWrite'
 import { splitLogs } from '@/lib/vehicleWrite'
-import { AREA_UNIT_KEY, INNER_FACILITIES_KEY, METER_FIELDS, setUnitStatus, unitKey, type PropertyUnit } from '@/lib/propertyWrite'
+import { AREA_UNIT_KEY, INNER_FACILITIES_KEY, METER_FIELDS, setUnitStatus, setUnitsStatus, unitKey, type PropertyUnit } from '@/lib/propertyWrite'
 import {
+  ACTIVITY_REMINDERS,
+  ACTIVITY_REQUIRED,
+  LEGAL_FORMS,
+  LICENSE_CLASSES,
+  PURPOSES,
+  TERM_MODES,
+  activityMissing,
   ADMIN_FEE_FIELDS,
   COLLECT_METHODS,
   CONTRACT_FIELDS,
@@ -74,7 +82,7 @@ import { Sheet } from './ui'
 const inputClass =
   'h-12 w-full rounded-field border border-line bg-field px-3 text-[13.5px] font-bold text-title outline-none placeholder:font-semibold placeholder:text-muted focus:border-gold'
 
-type Scope = 'contract' | 'property' | 'lessor' | 'tenant' | 'rep'
+type Scope = 'contract' | 'property' | 'lessor' | 'tenant' | 'rep' | 'license'
 const storeOf = (l: Lease, scope: Scope): Row => (scope === 'rep' ? l.representative : (l[scope] as Row))
 
 /** بيانات العقار والوحدة لعقد الإيجار (_leaseMeta). */
@@ -95,8 +103,10 @@ function leaseMetaOf(asset: Asset, unit: PropertyUnit): Row {
 
 export type Renewal = { notes: string | null; start: Date; end: Date; oldNo: string }
 
-function initialLease(asset: Asset, unit: PropertyUnit, existing?: UnitContract, renewal?: Renewal): Lease {
-  const l = decodeLease(existing?.notes ?? renewal?.notes)
+type Mode = { multi?: { key: string; name: string }[]; activity?: { prefill?: string } }
+
+function initialLease(asset: Asset | undefined, unit: PropertyUnit | undefined, existing: UnitContract | undefined, renewal: Renewal | undefined, mode: Mode): Lease {
+  const l = decodeLease(existing?.notes ?? renewal?.notes ?? mode.activity?.prefill)
   // التجديد: نسخة من السابق بلا تواريخه ورقمه وتوقيعه ودفعاته ورسومه.
   if (!existing && renewal) {
     const oldNo = (l.contract[K.newNo] ?? '').trim()
@@ -114,7 +124,14 @@ function initialLease(asset: Asset, unit: PropertyUnit, existing?: UnitContract,
     l.contract[K.endDate] = isoDay(renewal.end)
     if (renewal.oldNo.trim()) l.contract[K.oldNo] = renewal.oldNo.trim()
   }
-  fillPropertyFrom(l, leaseMetaOf(asset, unit))
+  if (asset) {
+    if (unit) fillPropertyFrom(l, leaseMetaOf(asset, unit))
+    else if (mode.multi) {
+      const meta: Row = {}
+      for (const [k, v] of Object.entries(splitLogs(asset.logs_json).meta)) if (v.trim()) meta[k] = v.trim()
+      fillPropertyFrom(l, meta)
+    }
+  }
   if (existing) {
     if (!(l.contract[K.value] ?? '') && Number(existing.annual_rent) > 0) l.contract[K.value] = Number(existing.annual_rent).toFixed(2)
     if (!(l.contract[K.startDate] ?? '') && existing.start_date) l.contract[K.startDate] = existing.start_date.slice(0, 10)
@@ -122,20 +139,70 @@ function initialLease(asset: Asset, unit: PropertyUnit, existing?: UnitContract,
     if (!(l.tenant[K.name] ?? '') && (existing.tenant_name ?? '')) l.tenant[K.name] = existing.tenant_name!
     if (!(l.tenant[K.phone] ?? '') && (existing.tenant_phone ?? '')) l.tenant[K.phone] = existing.tenant_phone!
   }
+  if (mode.activity) {
+    // التذكيران «قبل شهر» افتراضيًا في العقد الجديد.
+    if (!existing) for (const key of [K.leaseReminder, K.licenseReminder]) if (!(l.license[key] ?? '').trim()) l.license[key] = 'قبل شهر'
+    return l
+  }
   migrateMeters(l.property)
+  if (mode.multi) {
+    if (!existing) {
+      if (!(l.contract[K.termMode] ?? '').trim()) l.contract[K.termMode] = 'سنوي'
+      syncEndDate(l.contract)
+    }
+    return l
+  }
+  if (!unit) return l
   if (!(l.property['رقم العين'] ?? '')) l.property['رقم العين'] = unit.name
   if (!(l.property['بيانات العين المؤجرة'] ?? '').trim()) l.property['بيانات العين المؤجرة'] = unit.name
   return l
 }
 
-export function LeaseForm({ asset, unit, propertyType, existing, renewal, onClose, onDone }: { asset: Asset; unit: PropertyUnit; propertyType: string; existing?: UnitContract; renewal?: Renewal; onClose: () => void; onDone: (message: string) => void }) {
+/**
+  asset: العقار أو النشاط (بلا قيمة = نشاط تجاري جديد يُنشأ من رخصته).
+  unit: الوحدة (لا في متعدد الوحدات ولا في النشاط).
+*/
+export function LeaseForm({
+  asset,
+  unit,
+  propertyType,
+  existing,
+  renewal,
+  multi,
+  activity,
+  onClose,
+  onDone,
+}: {
+  asset?: Asset
+  unit?: PropertyUnit
+  propertyType: string
+  existing?: UnitContract
+  renewal?: Renewal
+  multi?: { key: string; name: string }[]
+  activity?: { classOptions: string[]; prefill?: string }
+  onClose: () => void
+  onDone: (message: string) => void
+}) {
   const { t } = useI18n()
   const qc = useQueryClient()
   const contracts = useUnitContracts()
   const store = useStore()
-  const key = unitKey(unit)
-  const numbers = useMemo(() => contractNumbers((contracts.data ?? []).filter((c) => c.asset_id === asset.id), key, existing), [contracts.data, asset.id, key, existing])
-  const [lease, setLease] = useState<Lease>(() => initialLease(asset, unit, existing, renewal))
+  const currency = useCurrency()
+  const isMulti = !!multi && !existing
+  const key = unit ? unitKey(unit) : activity ? ACTIVITY_UNIT_KEY : ''
+  const unitName = unit?.name ?? (activity && asset ? asset.title : '')
+  const propertyTitle = asset?.title ?? 'نشاط تجاري جديد'
+  const numbers = useMemo(() => contractNumbers((contracts.data ?? []).filter((c) => !!asset && c.asset_id === asset.id), key, existing), [contracts.data, asset, key, existing])
+  const [lease, setLease] = useState<Lease>(() => initialLease(asset, unit, existing, renewal, { multi, activity }))
+  const [chosen, setChosen] = useState<string[]>([])
+  const chosenList = (multi ?? []).filter((u) => chosen.includes(u.key))
+  const [lines, setLines] = useState<string[]>(() => {
+    const list = (lease.license[K.activities] ?? '').split('\n').map((x) => x.trim()).filter(Boolean)
+    while (list.length < 3) list.push('')
+    return list
+  })
+  const tradeName = (lease.license[K.tradeName] ?? '').trim()
+  const subjectName = unitName.trim() ? unitName : tradeName || propertyTitle
   // _fillContractNumbers: بعد تحميل العقود، مرة واحدة.
   const loaded = contracts.isSuccess
   useEffect(() => {
@@ -164,12 +231,14 @@ export function LeaseForm({ asset, unit, propertyType, existing, renewal, onClos
   const [review, setReview] = useState<{ draft: boolean } | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  // نشاط أُنشئ ثم تعذّر حفظ عقده: لا يُنشأ مرة ثانية.
+  const [createdId, setCreatedId] = useState('')
   const tot = totals(lease)
 
   /* ---------- الحقول ---------- */
   const fieldInput = (scope: Scope, spec: FieldSpec) => {
     const s = storeOf(lease, scope)
-    const required = (CONTRACT_REQUIRED[scope] ?? []).includes(spec.key)
+    const required = ((activity ? ACTIVITY_REQUIRED : CONTRACT_REQUIRED)[scope] ?? []).includes(spec.key)
     const label = (
       <span className="text-[12px] font-bold text-sub">
         {t(spec.label)}
@@ -291,6 +360,22 @@ export function LeaseForm({ asset, unit, propertyType, existing, renewal, onClos
     )
   }
 
+  /** التذكير: مدد ثابتة أو مخصص — لا يظهر في العقد. */
+  const reminderField = (key: string) => (
+    <label className="flex flex-col gap-1">
+      <span className="text-[12px] font-bold text-sub">{t('التذكير')}</span>
+      <select value={ACTIVITY_REMINDERS.includes(lease.license[key] ?? '') ? lease.license[key] : ''} onChange={(e) => update((l) => void (l.license[key] = e.target.value))} className={inputClass}>
+        <option value="">—</option>
+        {ACTIVITY_REMINDERS.map((o) => (
+          <option key={o} value={o}>
+            {t(o)}
+          </option>
+        ))}
+      </select>
+      <span className="text-[10.5px] font-semibold text-muted">{t('لا يظهر في العقد')}</span>
+    </label>
+  )
+
   const card = (title: string, Icon: typeof User, body: ReactNode, action?: ReactNode) => (
     <div className="mb-3 rounded-card border border-line bg-white p-4">
       <div className="mb-3 flex items-center gap-2">
@@ -323,7 +408,7 @@ export function LeaseForm({ asset, unit, propertyType, existing, renewal, onClos
       nameKey ? (
         <button type="button" onClick={() => setPicker({ scope, nameKey })} className="flex items-center gap-1 rounded-full bg-brand-soft px-3 py-1.5 text-[11.5px] font-extrabold text-brand">
           <Users className="size-3.5" />
-          {t('اختيار من الأفراد')}
+          {t('جلب من الأفراد')}
         </button>
       ) : undefined,
     )
@@ -439,7 +524,24 @@ export function LeaseForm({ asset, unit, propertyType, existing, renewal, onClos
     const start = parseDay(lease.contract[K.startDate])
     const end = parseDay(lease.contract[K.endDate])
     if (start && end && end.getTime() < start.getTime()) return setError('تاريخ نهاية العقد قبل تاريخ بدايته — صحّحه أولًا')
-    update(syncDerived)
+    if (isMulti && chosen.length < 2) return setError('اختر وحدتين على الأقل في «اختر الوحدات المشمولة»')
+    if (activity && !asset && !tradeName) return setError('اكتب الاسم التجاري في «بيانات الرخصة»')
+    const probe = cloneLease(lease)
+    if (activity) {
+      probe.license[K.activities] = lines.map((x) => x.trim()).filter(Boolean).join('\n')
+      if (!(probe.tenant[K.name] ?? '').trim() && tradeName) probe.tenant[K.name] = tradeName
+      if (!asDraft) {
+        const missing = activityMissing(probe)
+        if (missing.length) return setError(`${t('أكمل الحقول الإلزامية:')} ${missing.join('، ')}`)
+      }
+    }
+    if (isMulti) {
+      const names = chosenList.map((u) => u.name).join('، ')
+      probe.contract[K.multiUnits] = names
+      if (!(probe.property['بيانات العين المؤجرة'] ?? '').trim()) probe.property['بيانات العين المؤجرة'] = names
+    }
+    syncDerived(probe)
+    setLease(probe)
     if (asDraft) {
       update((l) => {
         delete l.contract[K.signedAt]
@@ -470,8 +572,32 @@ export function LeaseForm({ asset, unit, propertyType, existing, renewal, onClos
     try {
       const draft = missingRequired(lease).length > 0 || markedDraft
       const l = cloneLease(lease)
-      const { saved, paymentsIssue } = await saveUnitLease({ lease: l, draft, assetId: asset.id, unitKey: key, unitName: unit.name, propertyTitle: asset.title, existing })
-      await setUnitStatus(asset.id, key, saved.status === 'pending' ? 'مسودة' : 'مؤجرة').catch(() => {})
+      let assetId = asset?.id ?? createdId
+      let createdTitle = ''
+      if (!assetId && activity) {
+        const created = await createActivityAsset(l, currency)
+        assetId = created.id
+        createdTitle = created.title
+        setCreatedId(created.id)
+      }
+      const { saved, paymentsIssue } = await saveUnitLease({
+        lease: l,
+        draft,
+        assetId: assetId!,
+        unitKey: key,
+        unitName: activity ? subjectName : unitName,
+        propertyTitle,
+        existing,
+        multi: isMulti ? chosenList : undefined,
+        peopleSource: activity ? `عقد إيجار النشاط — ${subjectName}` : undefined,
+      })
+      if (activity) {
+        const leaseMeta = activityMetaFromLease(l)
+        await activityReminders(assetId!, createdTitle || asset?.title || subjectName, leaseMeta)
+        if (asset) await mergeActivityMeta(asset.id, leaseMeta).catch(() => {})
+      } else if (isMulti) {
+        await setUnitsStatus(assetId!, chosenList.map((u) => u.key), saved.status === 'pending' ? 'مسودة' : 'مؤجرة').catch(() => {})
+      } else await setUnitStatus(assetId!, key, saved.status === 'pending' ? 'مسودة' : 'مؤجرة').catch(() => {})
       await Promise.all(['assets', 'unit-contracts', 'unit-payments', 'store'].map((k) => qc.invalidateQueries({ queryKey: [k] })))
       const missing = missingRequired(l)
       const base = draft
@@ -480,7 +606,9 @@ export function LeaseForm({ asset, unit, propertyType, existing, renewal, onClos
           : t('حُفظ العقد كمسودة.')
         : renewal
           ? `${t('تم تجديد العقد بنجاح — رقم العقد الجديد')} ${contractNumber(saved)} (${t('السابق')} ${renewal.oldNo})`
-          : t('تم حفظ العقد')
+          : activity && !asset
+            ? t('تمت إضافة النشاط التجاري وعقد الإيجار')
+            : t('تم حفظ العقد')
       onDone(paymentsIssue ? `${base}\n${t('حُفظ العقد، وتعذّر توليد الدفعات الآن')} (${paymentsIssue})` : base)
     } catch (e) {
       setReview(null)
@@ -490,7 +618,7 @@ export function LeaseForm({ asset, unit, propertyType, existing, renewal, onClos
     }
   }
 
-  const title = renewal ? 'تجديد العقد' : 'عقد الإيجار'
+  const title = renewal ? 'تجديد العقد' : multi && !existing ? 'عقد متعدد الوحدات' : activity ? 'عقد إيجار النشاط' : 'عقد الإيجار'
   const payDue = (row: Row) => {
     const cheque = (row[K.collectMethod] ?? '') === 'شيك' ? (row[K.paymentChequeDate] ?? '').trim() : ''
     const due = cheque || (row[K.paymentDue] ?? '').trim()
@@ -511,18 +639,106 @@ export function LeaseForm({ asset, unit, propertyType, existing, renewal, onClos
             <FileText className="size-6 text-brand" />
             <div className="min-w-0">
               <p dir="auto" className="text-[14px] font-extrabold text-title">
-                {[propertyType && t(propertyType), asset.title].filter(Boolean).join(' / ')}
+                {[propertyType && t(propertyType), propertyTitle].filter(Boolean).join(' / ')}
               </p>
-              <p dir="auto" className="text-[12.5px] font-bold text-sub">
-                {unit.type ? `${t(unit.type)} / ${unit.name}` : `${t('الوحدة')}: ${unit.name}`}
-              </p>
+              {isMulti ? (
+                <p dir="auto" className="text-[12.5px] font-bold text-sub">
+                  {chosenList.length ? `${t('الوحدات:')} ${chosenList.map((u) => u.name).join('، ')}` : t('عقد متعدد الوحدات')}
+                </p>
+              ) : unit ? (
+                <p dir="auto" className="text-[12.5px] font-bold text-sub">
+                  {unit.type ? `${t(unit.type)} / ${unit.name}` : `${t('الوحدة')}: ${unit.name}`}
+                </p>
+              ) : activity && unitName ? (
+                <p dir="auto" className="text-[12.5px] font-bold text-sub">
+                  {t('النشاط')}: {unitName}
+                </p>
+              ) : null}
             </div>
           </div>
-          {section('بيانات عقد الإيجار', FileText, 'contract', CONTRACT_FIELDS)}
-          {section('بيانات العقار', Landmark, 'property', PROPERTY_FIELDS.map((f) => (f.key === 'مساحة العين' && (lease.property[K.areaUnit] ?? '').trim() && lease.property[K.areaUnit] !== 'م²' ? { ...f, label: `مساحة العين (${lease.property[K.areaUnit]})` } : f)))}
+          {isMulti &&
+            card(
+              'اختر الوحدات المشمولة بالعقد *',
+              Landmark,
+              <div>
+                <div className="flex flex-wrap gap-2">
+                  {multi!.map((u) => {
+                    const on = chosen.includes(u.key)
+                    return (
+                      <button key={u.key} type="button" onClick={() => setChosen((x) => (on ? x.filter((k) => k !== u.key) : [...x, u.key]))} className={cn('rounded-full border px-3 py-1.5 text-[12.5px] font-extrabold', on ? 'border-brand bg-brand/15 text-brand' : 'border-line text-ink')}>
+                        <span dir="auto">{u.name}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+                <p className="mt-2 text-[11.5px] font-semibold leading-relaxed text-muted">{t('اختر وحدتين على الأقل. الدفعات والتأمين تُسجَّل على أول وحدة مختارة، والإيجار السنوي يُوزَّع على الوحدات بالتساوي.')}</p>
+              </div>,
+              <span className="text-[13px] font-extrabold text-brand">{chosen.length}</span>,
+            )}
+          {activity ? (
+            <>
+              {card(
+                'بيانات عقد الإيجار',
+                FileText,
+                <div className="grid grid-cols-2 gap-2.5">
+                  {fieldInput('contract', { key: K.newNo, label: 'رقم العقد الجديد' })}
+                  {fieldInput('contract', { key: K.oldNo, label: 'رقم العقد المنتهي' })}
+                  {fieldInput('contract', { key: K.termMode, label: 'نمط مدة الإيجار', options: TERM_MODES })}
+                  {fieldInput('contract', { key: K.purpose, label: 'الغرض من الإيجار', options: PURPOSES })}
+                  {fieldInput('contract', { key: K.startDate, label: 'تاريخ بداية العقد', date: true })}
+                  {fieldInput('contract', { key: K.endDate, label: 'تاريخ نهاية العقد', date: true })}
+                  {reminderField(K.leaseReminder)}
+                  {(lease.license[K.leaseReminder] ?? '') === 'مخصص' ? fieldInput('license', { key: K.leaseReminderDays, label: 'عدد الأيام قبل الانتهاء', numeric: true }) : <span />}
+                </div>,
+              )}
+              {card(
+                'بيانات الرخصة',
+                Shield,
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div className="col-span-2">{fieldInput('license', { key: K.tradeName, label: 'الاسم التجاري' })}</div>
+                  <div className="col-span-2">{fieldInput('license', { key: K.activityLocation, label: 'موقع النشاط' })}</div>
+                  {fieldInput('license', { key: K.activityClass, label: 'تصنيف النشاط', options: [...activity.classOptions, ...((lease.license[K.activityClass] ?? '') && !activity.classOptions.includes(lease.license[K.activityClass]) ? [lease.license[K.activityClass]] : [])] })}
+                  {fieldInput('license', { key: K.legalForm, label: 'الشكل القانوني', options: LEGAL_FORMS })}
+                  {fieldInput('license', { key: K.licenseNo, label: 'رقم الرخصة التجارية' })}
+                  {fieldInput('license', { key: K.licenseIssue, label: 'تاريخ الإصدار', date: true })}
+                  {fieldInput('license', { key: K.licenseEnd, label: 'تاريخ الانتهاء', date: true })}
+                  {reminderField(K.licenseReminder)}
+                  {(lease.license[K.licenseReminder] ?? '') === 'مخصص' && (
+                    <>
+                      <span />
+                      {fieldInput('license', { key: K.licenseReminderDays, label: 'عدد الأيام قبل الانتهاء', numeric: true })}
+                    </>
+                  )}
+                  {fieldInput('license', { key: K.chamber, label: 'عضوية الغرفة' })}
+                  {fieldInput('license', { key: K.licenseClass, label: 'فئة الرخصة', options: LICENSE_CLASSES })}
+                  <div className="col-span-2 flex flex-col gap-1">
+                    <span className="text-[12px] font-bold text-sub">{t('الأنشطة التجارية')}</span>
+                    <div className="flex flex-col gap-1.5 rounded-inner bg-surface p-2">
+                      {lines.map((value, i) => (
+                        <div key={i} className="flex items-center gap-2">
+                          <span className="w-5 text-[12px] font-extrabold text-muted">{i + 1}.</span>
+                          <input dir="auto" value={value} onChange={(e) => setLines((x) => x.map((v, j) => (j === i ? e.target.value : v)))} className="h-10 flex-1 rounded-field bg-white px-3 text-[13px] font-bold text-title outline-none focus:ring-1 focus:ring-gold" />
+                        </div>
+                      ))}
+                      <button type="button" onClick={() => setLines((x) => [...x, ''])} className="flex items-center gap-1 self-start text-[12px] font-extrabold text-brand">
+                        <Plus className="size-4" />
+                        {t('المزيد')}
+                      </button>
+                    </div>
+                  </div>
+                  {fieldInput('license', { key: K.capital, label: 'رأس المال', numeric: true })}
+                </div>,
+              )}
+            </>
+          ) : (
+            <>
+              {section('بيانات عقد الإيجار', FileText, 'contract', CONTRACT_FIELDS)}
+              {section('بيانات العقار', Landmark, 'property', PROPERTY_FIELDS.map((f) => (f.key === 'مساحة العين' && (lease.property[K.areaUnit] ?? '').trim() && lease.property[K.areaUnit] !== 'م²' ? { ...f, label: `مساحة العين (${lease.property[K.areaUnit]})` } : f)))}
+            </>
+          )}
           {section('بيانات المؤجر', Landmark, 'lessor', LESSOR_FIELDS, K.name)}
           {section('بيانات المستأجر', User, 'tenant', TENANT_FIELDS, K.name)}
-          {section('بيانات ممثل المستأجر', User, 'rep', REP_FIELDS, K.repName)}
+          {!activity && section('بيانات ممثل المستأجر', User, 'rep', REP_FIELDS, K.repName)}
           {rowsCard({
             title: 'قيمة التأمين على العين',
             Icon: Shield,
@@ -663,7 +879,7 @@ export function LeaseForm({ asset, unit, propertyType, existing, renewal, onClos
             </button>
             <button type="button" disabled={busy} onClick={() => startSave(false)} className="flex h-12 flex-1 items-center justify-center gap-2 rounded-field bg-brand text-[14px] font-extrabold text-white hover:bg-brand-dark disabled:opacity-60">
               {busy && <Loader2 className="size-4 animate-spin" />}
-              {t(busy ? 'جارٍ الحفظ...' : renewal ? 'تجديد العقد' : 'حفظ العقد')}
+              {t(busy ? 'جارٍ الحفظ...' : renewal ? 'تجديد العقد' : activity ? 'حفظ عقد النشاط' : 'حفظ العقد')}
             </button>
           </div>
         </div>

@@ -758,6 +758,23 @@ export async function setUnitStatus(assetId: string, key: string, status: string
   await mutateUnit(assetId, key, (u) => ({ ...u, status }))
 }
 
+/** حالة عدة وحدات معًا (عقد متعدد الوحدات) في كتابة واحدة. */
+export async function setUnitsStatus(assetId: string, keys: string[], status: string) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const fresh = await readFresh(assetId)
+    const all = decodeUnits(fresh.units_json)
+    let changed = false
+    const next = all.map((u) => {
+      if (!unitIsLive(u) || !keys.includes(unitKey(u)) || u.status === status) return u
+      changed = true
+      return { ...u, status }
+    })
+    if (!changed) return
+    if (await writeGuarded(assetId, fresh.updated_at, { units_json: encodeUnits(next) })) return
+  }
+  throw new AssetError('تغيّرت البيانات أثناء الحفظ — أعد المحاولة')
+}
+
 /** تجميد الوحدة أو إلغاء تجميدها (شاغرة). */
 export const toggleUnitFreeze = (assetId: string, key: string) => mutateUnit(assetId, key, (u) => ({ ...u, status: u.status === 'مجمّدة' ? 'شاغرة' : 'مجمّدة' }))
 
