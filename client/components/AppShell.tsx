@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom'
-import { Bell, Ellipsis, House, LayoutDashboard, type LucideIcon } from 'lucide-react'
+import { Bell, CalendarDays, Ellipsis, FileText, House, LayoutDashboard, type LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/format'
 import { useI18n } from '@/lib/i18n'
 import { useSession } from '@/lib/session'
@@ -15,12 +15,15 @@ export function AppShell() {
   const { t } = useI18n()
   const { account } = useSession()
   const inbox = useInbox()
-  const items: Item[] = [
+  const items: (Item & { desktopOnly?: boolean })[] = [
     { to: '/', label: 'الرئيسية', icon: House },
-    { to: '/summary', label: 'الملخص الشامل', icon: LayoutDashboard },
+    { to: '/summary', label: 'الملخص الشامل', icon: LayoutDashboard, desktopOnly: true },
+    { to: '/documents', label: 'المستندات', icon: FileText },
+    { to: '/calendar', label: 'الكلندر الذكي', icon: CalendarDays },
     { to: '/requests', label: 'الطلبات', icon: Bell, badge: inbox.data?.length ?? 0 },
     { to: '/more', label: 'المزيد', icon: Ellipsis },
   ]
+  const mobile = items.filter((item) => !item.desktopOnly)
 
   return (
     <div className="min-h-screen bg-page lg:flex">
@@ -69,14 +72,14 @@ export function AppShell() {
 
       {/* الشريط السفلي — الجوال، بنفس شكل التطبيق */}
       <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-white pb-[env(safe-area-inset-bottom)] lg:hidden">
-        <div className="mx-auto grid max-w-xl grid-cols-4">
-          {items.map((item) => (
+        <div className="mx-auto grid max-w-xl grid-cols-5">
+          {mobile.map((item) => (
             <NavLink key={item.to} to={item.to} end={item.to === '/'} className="flex flex-col items-center gap-1 py-2">
               {({ isActive }) => (
                 <>
                   <span
                     className={cn(
-                      'relative grid h-8 w-14 place-items-center rounded-full transition-colors',
+                      'relative grid h-8 w-12 place-items-center rounded-full transition-colors',
                       isActive ? 'bg-brand-soft text-brand-dark' : 'text-muted',
                     )}
                   >
@@ -87,7 +90,7 @@ export function AppShell() {
                       </span>
                     )}
                   </span>
-                  <span className={cn('text-[11px]', isActive ? 'font-extrabold text-brand-dark' : 'text-muted')}>
+                  <span className={cn('px-0.5 text-center text-[10px] leading-tight', isActive ? 'font-extrabold text-brand-dark' : 'text-muted')}>
                     {t(item.label)}
                   </span>
                 </>

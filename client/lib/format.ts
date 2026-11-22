@@ -16,7 +16,7 @@ export function money(value: unknown, currency = ''): string {
 export function date(value: unknown): string {
   if (!value) return ''
   const raw = String(value)
-  const d = new Date(raw.length === 10 ? `${raw}T00:00:00` : raw)
+  const d = value instanceof Date ? value : new Date(raw.length === 10 ? `${raw}T00:00:00` : raw)
   if (Number.isNaN(d.getTime())) return raw
   const dd = String(d.getDate()).padStart(2, '0')
   const mm = String(d.getMonth() + 1).padStart(2, '0')

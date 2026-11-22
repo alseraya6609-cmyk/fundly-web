@@ -1,13 +1,14 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ClipboardList, LayoutGrid, UserRound, UsersRound, type LucideIcon } from 'lucide-react'
 import { useI18n } from '@/lib/i18n'
 import { moduleHidden, useSession } from '@/lib/session'
-import { currencyOf, useCurrency, usePersonal, useShared, type Entry } from '@/lib/data'
+import { currencyOf, useCommitmentExtras, useCurrency, usePersonal, useShared, type Entry } from '@/lib/data'
 import { MODULE_COLORS, PERSONAL_GROUPS, personalGroup, SHARED_GROUPS, sharedLabel } from '@/lib/catalog'
 import { date, matches, money } from '@/lib/format'
 import { Chip, Empty, ErrorBox, InfoRow, Loading, PageHeader, SearchField, SectionTitle, Sheet } from '@/components/ui'
 import { EntryCard } from '@/components/EntryCard'
+import { FileButton } from '@/components/FileButton'
 
 type Group = { key: string; label: string; icon: LucideIcon }
 
@@ -144,7 +145,7 @@ function EntriesPage({
       )}
 
       <Sheet open={!!open} onClose={() => setParams({})}>
-        {open && <EntryDetails entry={open} color={color} typeLabel={typeLabel(open)} currency={currency} />}
+        {open && <EntryDetails entry={open} color={color} typeLabel={typeLabel(open)} currency={currency} page={page} />}
       </Sheet>
     </div>
   )
@@ -153,30 +154,184 @@ function EntriesPage({
 // قيم لا تُعرض في الموقع حتى لو حفظها التطبيق (كلمات السر والرموز).
 const SENSITIVE = /(كلمة|كلمات|سر|رمز|pin|pass|password|secret|otp|cvv)/i
 
-function EntryDetails({ entry, color, typeLabel, currency }: { entry: Entry; color: string; typeLabel: string; currency: string }) {
+// سجلات محفوظة داخل الالتزام نفسه (قوائم JSON في details) — تُعرض جداول.
+const LOGS = [
+  'سجل دفعات الالتزام',
+  'سجل صرفيات العهدة',
+  'سجل المصروفات المشتركة',
+  'سجل المساهمات',
+  'سجل التسويات',
+  'مستندات',
+  'مرفقات إضافية',
+]
+// مفاتيح ملفات داخل السجلات: تُعرض زر فتح بدل النص.
+const FILE_KEYS = new Set(['مرفق الفاتورة', 'receipt', 'path', 'المرفق'])
+
+function parseRows(v: unknown): Record<string, unknown>[] {
+  let list: unknown = v
+  if (typeof v === 'string') {
+    try {
+      list = JSON.parse(v)
+    } catch {
+      return []
+    }
+  }
+  return Array.isArray(list) ? (list.filter((r) => r && typeof r === 'object') as Record<string, unknown>[]) : []
+}
+
+/** ملف مستند الالتزام المشترك داخل حقل extra (المرفق). */
+function extraFile(extra: unknown): string {
+  let map: unknown = extra
+  if (typeof extra === 'string') {
+    try {
+      map = JSON.parse(extra)
+    } catch {
+      return ''
+    }
+  }
+  return map && typeof map === 'object' ? String((map as Record<string, unknown>)['المرفق'] ?? '').trim() : ''
+}
+
+function EntryDetails({
+  entry,
+  color,
+  typeLabel,
+  currency,
+  page,
+}: {
+  entry: Entry
+  color: string
+  typeLabel: string
+  currency: string
+  page: string
+}) {
   const { t } = useI18n()
-  const extras = Object.entries(entry.details ?? {})
-    .filter(([key, value]) => /[؀-ۿ]/.test(key) && ['string', 'number'].includes(typeof value) && String(value).trim() !== '')
-    .slice(0, 30)
+  const extrasQ = useCommitmentExtras(page === 'personal' ? entry.id : undefined)
+  const bucket = page === 'personal' ? 'personal-entry-attachments' : 'shared-entry-attachments'
+  const fields = Object.entries(entry.details ?? {})
+    .filter(([key, value]) => /[\u0600-\u06FF]/.test(key) && !LOGS.includes(key) && ['string', 'number'].includes(typeof value))
+    .filter(([, value]) => String(value).trim() !== '' && !String(value).trim().startsWith('['))
+    .slice(0, 40)
+  const logs = LOGS.map((key) => [key, parseRows(entry.details?.[key])] as const).filter(([, rows]) => rows.length > 0)
+  const x = extrasQ.data
+
   return (
     <div>
       <p className="text-[12px] font-bold" style={{ color }}>
         {t(typeLabel)}
       </p>
-      <h2 className="mt-1 text-[20px] font-extrabold text-title">{entry.title}</h2>
+      <h2 dir="auto" className="mt-1 text-[20px] font-extrabold text-title">
+        {entry.title}
+      </h2>
+      {entry.attachment_url && <FileButton className="mt-3" file={{ bucket, path: entry.attachment_url }} label="فتح المرفق" />}
       <div className="mt-4">
         {Number(entry.amount) > 0 && <InfoRow label="المبلغ" value={money(entry.amount, t(currencyOf(entry.details, currency)))} />}
         <InfoRow label="التاريخ" value={date(entry.due_date)} />
         <InfoRow label="الحالة" value={t(entry.status)} />
-        {extras.map(([key, value]) => (
+        {fields.map(([key, value]) => (
           <InfoRow key={key} label={key} value={SENSITIVE.test(key) ? t('مخفية في الموقع') : String(value)} />
         ))}
         <InfoRow label="تاريخ الإضافة" value={date(entry.created_at)} />
         <InfoRow label="آخر تحديث" value={date(entry.updated_at)} />
       </div>
+
+      {logs.map(([key, rows]) => (
+        <DetailBlock key={key} title={key} count={rows.length}>
+          {rows.slice(0, 50).map((row, i) => (
+            <div key={i} className="card-inner px-3 py-2">
+              {extraFile(row.extra) && <FileButton className="my-1" file={{ localPath: extraFile(row.extra) }} />}
+              {Object.entries(row)
+                .filter(([k, v]) => !k.startsWith('_') && k !== 'extra' && v !== null && v !== '' && typeof v !== 'object')
+                .map(([k, v]) =>
+                  FILE_KEYS.has(k) ? (
+                    <FileButton
+                      key={k}
+                      className="my-1"
+                      file={key === 'مرفقات إضافية' || k === 'مرفق الفاتورة' ? { bucket, path: String(v) } : { localPath: String(v) }}
+                    />
+                  ) : (
+                    <p key={k} className="text-[12px] leading-relaxed">
+                      <span className="text-muted">{t(k)}: </span>
+                      <span dir="auto" className="font-semibold text-ink">
+                        {SENSITIVE.test(k) ? t('مخفية في الموقع') : String(v)}
+                      </span>
+                    </p>
+                  ),
+                )}
+            </div>
+          ))}
+        </DetailBlock>
+      ))}
+
+      {x && x.payments.length > 0 && (
+        <DetailBlock title="الدفعات" count={x.payments.length}>
+          {x.payments.map((p) => (
+            <div key={p.id} className="card-inner flex flex-wrap justify-between gap-2 px-3 py-2 text-[12px]">
+              <span className="font-bold text-ink">{money(p.amount, t(currencyOf(entry.details, currency)))}</span>
+              <span className="text-muted">
+                {date(p.payment_date)}
+                {p.payment_method ? ` · ${t(p.payment_method)}` : ''}
+              </span>
+              {p.notes && <span className="w-full text-sub">{p.notes}</span>}
+            </div>
+          ))}
+        </DetailBlock>
+      )}
+      {x && x.appointments.length > 0 && (
+        <DetailBlock title="المواعيد" count={x.appointments.length}>
+          {x.appointments.map((a) => (
+            <div key={a.id} className="card-inner px-3 py-2 text-[12px]">
+              <p className="font-bold text-ink">{a.title}</p>
+              <p className="text-muted">
+                {t(a.appointment_type)} · {date(a.appointment_date)}
+                {a.appointment_time ? ` · ${a.appointment_time.slice(0, 5)}` : ''} · {t(a.status)}
+              </p>
+            </div>
+          ))}
+        </DetailBlock>
+      )}
+      {x && x.notes.length > 0 && (
+        <DetailBlock title="الملاحظات" count={x.notes.length}>
+          {x.notes.map((n) => (
+            <div key={n.id} className="card-inner px-3 py-2 text-[12px]">
+              <p className="font-bold text-ink">{n.title}</p>
+              <p className="whitespace-pre-line text-sub">{n.content}</p>
+              <p className="mt-1 text-[11px] text-muted">{date(n.created_at)}</p>
+            </div>
+          ))}
+        </DetailBlock>
+      )}
+      {x && x.people.length > 0 && (
+        <DetailBlock title="الأشخاص" count={x.people.length}>
+          {x.people.map((p) => (
+            <div key={p.id} className="card-inner px-3 py-2 text-[12px]">
+              <p className="font-bold text-ink">{p.person_name}</p>
+              <p className="text-muted">
+                {p.role_or_relationship ? t(p.role_or_relationship) : ''}
+                {p.phone_number ? <span className="ltr ms-2 inline-block">{p.phone_number}</span> : null}
+              </p>
+            </div>
+          ))}
+        </DetailBlock>
+      )}
+
       <p className="mt-5 rounded-inner bg-surface px-4 py-3 text-[12px] text-sub">
         {t('التعديل والإضافة من التطبيق حاليًا. الموقع للعرض في هذه المرحلة.')}
       </p>
+    </div>
+  )
+}
+
+function DetailBlock({ title, count, children }: { title: string; count: number; children: ReactNode }) {
+  const { t } = useI18n()
+  return (
+    <div className="mt-5">
+      <p className="mb-2 flex items-center gap-2 text-[14px] font-extrabold text-title">
+        <span className="h-4 w-1 rounded-full bg-gold" />
+        {t(title)}
+        <span className="rounded-full bg-surface px-2 text-[11px] text-sub">{count}</span>
+      </p>
+      <div className="flex flex-col gap-2 rounded-inner bg-surface p-2">{children}</div>
     </div>
   )
 }

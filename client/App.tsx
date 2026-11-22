@@ -11,6 +11,8 @@ import Assets from '@/pages/Assets'
 import Summary from '@/pages/Summary'
 import Requests from '@/pages/Requests'
 import More from '@/pages/More'
+import Documents from '@/pages/Documents'
+import Calendar from '@/pages/Calendar'
 import NotFound from '@/pages/NotFound'
 import { Maintenance, PolicyConsent, Splash, Suspended } from '@/pages/Gates'
 
@@ -51,6 +53,8 @@ export default function App() {
                 <Route path="people" element={<People />} />
                 <Route path="assets" element={<Assets />} />
                 <Route path="summary" element={<Summary />} />
+                <Route path="documents" element={<Documents />} />
+                <Route path="calendar" element={<Calendar />} />
                 <Route path="requests" element={<Requests />} />
                 <Route path="more" element={<More />} />
                 <Route path="*" element={<NotFound />} />

@@ -19,6 +19,7 @@ export type Entry = {
   due_date: string | null
   status: string
   details: Record<string, unknown>
+  attachment_url?: string | null
   created_at: string
   updated_at: string
 }
@@ -37,8 +38,18 @@ export type Asset = {
   rent_value: string | null
   end_date: string | null
   needs_attention: boolean
+  logs_json?: string | null
   created_at: string
   updated_at: string
+}
+
+export type AssetEntry = {
+  id: string
+  asset_id: string
+  kind: string
+  data: Record<string, unknown>
+  attachment_url: string | null
+  created_at: string
 }
 
 export type Person = {
@@ -74,6 +85,10 @@ export type InboxItem = {
 
 const STALE = 60_000
 
+/** ما في سلة المحذوفات لا يظهر في أي مكان ولا يدخل أي رقم (كما في التطبيق). */
+export const TRASH = 'محذوف'
+const live = <T extends { status?: string }>(list: T[]) => list.filter((row) => row.status !== TRASH)
+
 async function rows<T>(query: PromiseLike<{ data: T[] | null; error: unknown }>): Promise<T[]> {
   const { data, error } = await query
   if (error) throw error
@@ -92,10 +107,10 @@ export function usePersonal() {
       rows<Entry>(
         supabase
           .from('personal_entries')
-          .select('id, category, entry_type, title, amount, due_date, status, details, created_at, updated_at')
+          .select('id, category, entry_type, title, amount, due_date, status, details, attachment_url, created_at, updated_at')
           .eq('user_id', user!.id)
           .order('created_at', { ascending: false }),
-      ),
+      ).then(live),
   })
 }
 
@@ -109,10 +124,10 @@ export function useShared() {
       rows<Entry>(
         supabase
           .from('shared_entries')
-          .select('id, category, entry_type, title, amount, due_date, status, details, created_at, updated_at')
+          .select('id, category, entry_type, title, amount, due_date, status, details, attachment_url, created_at, updated_at')
           .eq('user_id', user!.id)
           .order('created_at', { ascending: false }),
-      ),
+      ).then(live),
   })
 }
 
@@ -124,15 +139,112 @@ export function useAssets() {
     staleTime: STALE,
     queryFn: () =>
       rows<Asset>(
+        // كل الأعمدة: logs_json فيه البيانات الرسمية للأصل (سطر ##meta##).
+        supabase.from('project_assets').select('*').eq('user_id', user!.id).order('created_at', { ascending: false }),
+      ).then(live),
+  })
+}
+
+/** سجلات الأصول كلها: العقود، الصيانة، الإيجار، المصروفات، الإيرادات، المستندات. */
+export function useAssetEntries() {
+  const { user } = useSession()
+  return useQuery({
+    queryKey: ['asset-entries', user?.id],
+    enabled: !!user,
+    staleTime: STALE,
+    queryFn: () =>
+      rows<AssetEntry>(
         supabase
-          .from('project_assets')
-          .select(
-            'id, title, sub_type, category, status, location_or_type, amount_label, followup_note, owner, tenant, rent_value, end_date, needs_attention, created_at, updated_at',
-          )
+          .from('project_asset_entries')
+          .select('id, asset_id, kind, data, attachment_url, created_at')
           .eq('user_id', user!.id)
           .order('created_at', { ascending: false }),
       ),
   })
+}
+
+/** البيانات الرسمية للأصل من سطر «##meta##» في logs_json (DocumentsHub._metaOf). */
+export function assetMeta(asset: Asset): Record<string, string> {
+  const raw = asset.logs_json
+  if (!raw || !String(raw).trim()) return {}
+  try {
+    const list = JSON.parse(String(raw))
+    if (!Array.isArray(list)) return {}
+    for (const line of list) {
+      const text = String(line)
+      if (!text.startsWith('##meta##')) continue
+      const map = JSON.parse(text.slice('##meta##'.length))
+      if (map && typeof map === 'object') {
+        return Object.fromEntries(Object.entries(map).map(([k, v]) => [k, String(v ?? '').trim()]))
+      }
+    }
+  } catch {
+    // سطر تالف: بلا بيانات رسمية.
+  }
+  return {}
+}
+
+export type CommitmentExtras = {
+  payments: { id: string; amount: number; payment_date: string; payment_method: string | null; reference_number: string | null; notes: string | null }[]
+  appointments: { id: string; appointment_type: string; title: string; appointment_date: string; appointment_time: string | null; status: string; location: string | null }[]
+  notes: { id: string; note_type: string; title: string; content: string; created_at: string }[]
+  people: { id: string; person_name: string; role_or_relationship: string | null; phone_number: string | null }[]
+}
+
+/** إضافات الالتزام الشخصي (جداول commitment_*). */
+export function useCommitmentExtras(entryId: string | undefined) {
+  const { user } = useSession()
+  return useQuery({
+    queryKey: ['commitment-extras', entryId],
+    enabled: !!user && !!entryId,
+    staleTime: STALE,
+    queryFn: async (): Promise<CommitmentExtras> => {
+      const by = (table: string, columns: string, order: string) =>
+        rows<any>(supabase.from(table).select(columns).eq('commitment_id', entryId!).order(order, { ascending: false })).catch(
+          () => [],
+        )
+      const [payments, appointments, notes, people] = await Promise.all([
+        by('commitment_payments', 'id, amount, payment_date, payment_method, reference_number, notes', 'payment_date'),
+        by('commitment_appointments', 'id, appointment_type, title, appointment_date, appointment_time, status, location', 'appointment_date'),
+        by('commitment_notes', 'id, note_type, title, content, created_at', 'created_at'),
+        by('commitment_people', 'id, person_name, role_or_relationship, phone_number', 'created_at'),
+      ])
+      return { payments, appointments, notes, people }
+    },
+  })
+}
+
+// ---------------- الملفات ----------------
+
+/** مخزن الملفات المزامَنة من الجوال (FundlyFiles.bucket). */
+export const FILES_BUCKET = 'fundly-files'
+
+/** اسم الملف من مسار الجوال (DocumentStore.fileName). */
+export function fileNameOf(path: string): string {
+  return String(path ?? '').split(/[\\/]/).pop()?.trim() ?? ''
+}
+
+/** مفتاح الملف في المخزن: base64Url لاسم الملف بلا «=» (FundlyFiles.keyFor). */
+export function fileKey(name: string): string {
+  const bytes = new TextEncoder().encode(name)
+  let binary = ''
+  bytes.forEach((b) => (binary += String.fromCharCode(b)))
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+/** رابط مؤقت لفتح ملف — قراءة فقط، صالح عشر دقائق. */
+export async function openFile(file: { bucket?: string; path?: string; localPath?: string }): Promise<string | null> {
+  let bucket = file.bucket
+  let path = file.path
+  if (!path && file.localPath) {
+    bucket = FILES_BUCKET
+    path = fileKey(fileNameOf(file.localPath))
+  }
+  if (!bucket || !path) return null
+  if (/^https?:\/\//.test(path)) return path
+  const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, 600)
+  if (error || !data?.signedUrl) return null
+  return data.signedUrl
 }
 
 export function useInbox() {
@@ -222,6 +334,27 @@ export function usePeople() {
     (p): p is Person => !!p && typeof p === 'object' && String((p as Person).fullName ?? '').trim() !== '',
   )
   return { ...store, data: store.isSuccess ? people : undefined }
+}
+
+export type CalendarRecord = {
+  id: string
+  title: string
+  type: string
+  date: string
+  time?: string
+  priority?: string
+  status?: string
+  description?: string
+  notes?: string
+}
+
+/** بنود «الكلندر الذكي» التي أضافها المستخدم (smart_calendar_records_v1). */
+export function useCalendarRecords() {
+  const store = useStore()
+  const list = jsonList(store.data?.['smart_calendar_records_v1']).filter(
+    (r): r is CalendarRecord => !!r && typeof r === 'object' && !!(r as CalendarRecord).date,
+  )
+  return { ...store, data: store.isSuccess ? list : undefined }
 }
 
 /** العملة الافتراضية للمستخدم (settings_currency)، كما يعرضها التطبيق. */

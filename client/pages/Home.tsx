@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Building2, ClipboardList, Inbox, LayoutDashboard, UsersRound, UserRound, type LucideIcon } from 'lucide-react'
+import { Building2, CalendarDays, ClipboardList, Inbox, LayoutDashboard, UsersRound, UserRound, type LucideIcon } from 'lucide-react'
 import { useI18n } from '@/lib/i18n'
 import { moduleHidden, useSession } from '@/lib/session'
 import { useAssets, useInbox, usePeople, usePersonal, useShared, useStore } from '@/lib/data'
 import { ASSET_GROUPS, MODULE_COLORS, assetGroup, personalGroup, PERSONAL_GROUPS, sharedLabel, SHARED_GROUPS } from '@/lib/catalog'
 import { matches } from '@/lib/format'
+import { needsFollowup, useDocuments } from '@/lib/documents'
 import { Chevron, IconBadge, SearchField, SectionTitle } from '@/components/ui'
 
 // home_layout_store.dart: الترتيب الافتراضي ومفاتيح الحفظ.
@@ -65,6 +66,14 @@ export default function Home() {
 
   const requests = inbox.data?.length ?? 0
 
+  // «مستندات تحتاج متابعة» لكل قسم: منتهية أو تنتهي خلال 30 يومًا (كما في التطبيق).
+  const { docs } = useDocuments()
+  const docsFollow: Record<ModuleId, number> = {
+    people: docs.filter((d) => (d.module === 'الأفراد والجهات' || d.module === 'الالتزامات الشخصية') && needsFollowup(d)).length,
+    shared: docs.filter((d) => d.module === 'الالتزامات المشتركة' && needsFollowup(d)).length,
+    assets: docs.filter((d) => ['العقارات', 'الأنشطة التجارية', 'المركبات ووسائل النقل'].includes(d.module) && needsFollowup(d)).length,
+  }
+
   return (
     <div>
       {/* الترويسة الخضراء كما في رئيسية التطبيق */}
@@ -83,9 +92,14 @@ export default function Home() {
               </p>
             )}
           </div>
-          <Link to="/more" className="grid size-11 shrink-0 place-items-center rounded-full bg-white/15 text-white">
-            <UserRound className="size-5" />
-          </Link>
+          <div className="flex shrink-0 gap-2">
+            <Link to="/calendar" aria-label={t('الكلندر الذكي')} className="grid size-11 place-items-center rounded-full bg-white/15 text-white hover:bg-white/25">
+              <CalendarDays className="size-5" />
+            </Link>
+            <Link to="/more" aria-label={t('المزيد')} className="grid size-11 place-items-center rounded-full bg-white/15 text-white hover:bg-white/25">
+              <UserRound className="size-5" />
+            </Link>
+          </div>
         </div>
         <div className="relative mt-5">
           <SearchField value={query} onChange={setQuery} placeholder="أبحث عن أي شيء" />
@@ -123,11 +137,19 @@ export default function Home() {
                     <Chevron className="mt-1" />
                   </div>
                   <p className="-mt-1 text-[15px] font-extrabold leading-snug text-title">{t(m.title)}</p>
-                  <div className="card-inner flex items-center justify-between px-3 py-2">
-                    <span className="text-[12px] text-sub">{t('السجلات')}</span>
-                    <span className="text-[17px] font-extrabold" style={{ color: m.color }}>
-                      {m.count ?? '…'}
-                    </span>
+                  <div className="card-inner flex flex-col gap-1 px-3 py-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[12px] text-sub">{t('السجلات')}</span>
+                      <span className="text-[17px] font-extrabold" style={{ color: m.color }}>
+                        {m.count ?? '…'}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[12px] text-sub">{t('مستندات تحتاج متابعة')}</span>
+                      <span className="text-[15px] font-extrabold" style={{ color: docsFollow[id] ? '#A6691A' : '#8C9A97' }}>
+                        {docsFollow[id]}
+                      </span>
+                    </div>
                   </div>
                 </Link>
               )
