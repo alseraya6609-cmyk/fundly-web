@@ -167,6 +167,7 @@ export type FieldSpec = {
   chequeOnly?: boolean
   hideForCheque?: boolean
   customReminderOnly?: boolean
+  time?: boolean
 }
 
 /** contractFields */
@@ -178,6 +179,43 @@ export const CONTRACT_FIELDS: FieldSpec[] = [
   { key: K.startDate, label: 'تاريخ بداية عقد الإيجار', date: true },
   { key: K.endDate, label: 'تاريخ نهاية عقد الإيجار', date: true },
 ]
+
+/* ===== عقد تأجير المركبة (محل العقد «مركبة») ===== */
+export const SUBJECT_VEHICLE = 'مركبة'
+export const isVehicleLease = (l: Lease) => (l.contract[K.subject] ?? '').trim() === SUBJECT_VEHICLE
+export const START_TIME_KEY = 'ساعة بداية العقد'
+export const END_TIME_KEY = 'ساعة نهاية العقد'
+export const DRIVER_KEY = 'السائق'
+export const DRIVER_OPTIONS = ['بسائق', 'بدون سائق']
+export const VEHICLE_TERM_MODES = ['بالساعات', 'يومي', 'شهري', 'سنوي', 'مخصص']
+export const TERMS_PARTIES = ['على المؤجر', 'على المستأجر']
+
+/** vehicleContractFields: الرقمان، نمط المدة (مع «بالساعات»)، التاريخان وساعتاهما. */
+export const VEHICLE_CONTRACT_FIELDS: FieldSpec[] = [
+  { key: K.newNo, label: 'رقم العقد الجديد' },
+  { key: K.oldNo, label: 'رقم العقد المنتهي' },
+  { key: K.termMode, label: 'نمط مدة الإيجار', options: VEHICLE_TERM_MODES },
+  { key: K.startDate, label: 'تاريخ بداية عقد الإيجار', date: true },
+  { key: K.endDate, label: 'تاريخ نهاية عقد الإيجار', date: true },
+  { key: START_TIME_KEY, label: 'من الساعة', time: true },
+  { key: END_TIME_KEY, label: 'إلى الساعة', time: true },
+]
+
+/** vehicleTermsFields: شروط التأجير في بيانات العقد نفسه. */
+export const VEHICLE_TERMS_FIELDS: FieldSpec[] = [
+  { key: 'موقع التأجير', label: 'موقع التأجير / المشروع' },
+  { key: 'رقم التواصل', label: 'رقم التواصل', numeric: true },
+  { key: 'الصيانة على', label: 'الصيانة على', options: TERMS_PARTIES },
+  { key: 'الوقود على', label: 'الوقود على', options: TERMS_PARTIES },
+  { key: 'نقل المركبة على', label: 'نقل المركبة على', options: TERMS_PARTIES },
+  { key: 'شروط التأجير', label: 'شروط التأجير', multiline: true },
+]
+
+/** vehicleRequired */
+export const VEHICLE_REQUIRED: Record<string, string[]> = {
+  contract: [K.termMode],
+  property: ['تصنيف المركبة', 'نوع المركبة', 'اسم المركبة', 'تاريخ انتهاء الملكية'],
+}
 
 /** leasePropertyFields */
 export const PROPERTY_FIELDS: FieldSpec[] = [
@@ -422,8 +460,15 @@ export function missingRequired(l: Lease): string[] {
   if (!v(l.contract, K.endDate)) out.push('تاريخ نهاية العقد')
   if (!l.payments.length && !v(l.contract, K.multiPrimary)) out.push('دفعات الإيجار')
   if (!v(l.contract, K.contractScope)) out.push('الملخص المالي للعقد')
+  // المركبة: بسائق أو بدون، ونمط المدة، وبيانات المركبة الأساسية.
+  const vehicle = isVehicleLease(l)
+  if (vehicle) {
+    if (!v(l.contract, DRIVER_KEY)) out.push('بسائق أو بدون سائق')
+    if (!v(l.contract, K.termMode)) out.push('نمط مدة الإيجار')
+    for (const key of VEHICLE_REQUIRED.property) if (!v(l.property, key)) out.push(key)
+  }
   if (!v(l.tenant, 'تاريخ انتهاء الهوية')) out.push('تاريخ انتهاء هوية المستأجر')
-  if (!Object.keys(l.license).length) for (const key of CONTRACT_REQUIRED.property) if (!v(l.property, key)) out.push(key)
+  if (!vehicle && !Object.keys(l.license).length) for (const key of CONTRACT_REQUIRED.property) if (!v(l.property, key)) out.push(key)
   if (!v(l.lessor, K.name)) out.push('اسم المؤجر')
   if (!v(l.lessor, 'رقم الهوية')) out.push('رقم هوية المؤجر')
   if (!v(l.lessor, 'تاريخ انتهاء الهوية')) out.push('تاريخ انتهاء هوية المؤجر')

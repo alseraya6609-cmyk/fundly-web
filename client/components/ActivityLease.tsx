@@ -11,6 +11,7 @@ import { ACTIVITY_UNIT_KEY, activityLicenseFromMeta } from '@/lib/activityWrite'
 import { ACTIVITY_TYPES, K, contractNumber, decodeLease, emptyLease, encodeLease, pretty, shareText } from '@/lib/lease'
 import { contractClosed, contractEnded } from '@/lib/leaseActions'
 import { printText, type Renewal } from './LeaseForm'
+import { useLeasePrint } from './LeasePrint'
 import { Confirm } from './Confirm'
 import { SettleRent } from './SettleRent'
 import { ActionTile, DuesBox, ExtendFlow, MonthsSheet } from './UnitLease'
@@ -287,7 +288,9 @@ function ActivityContractSheet({ asset, contract, payments, currency, onClose }:
     })
     text += ['', 'جدول الدفعات:', ...rows, '', `إجمالي المستحق: ${m(due)}`, `إجمالي المسدد: ${m(paid)}`, `المتبقي: ${m(due - paid)}`].join('\n') + '\n'
   }
-  const print = () => printText(`عقد-${asset.title}`, text)
+  // «طباعة / مشاركة»: نموذج العقد المعتمد (printOrShareLeaseContract)، والعقد القديم بلا بيانات نصًّا.
+  const leasePrint = useLeasePrint()
+  const print = () => (isEmpty ? printText(`عقد-${asset.title}`, text) : leasePrint.open({ lease, title: 'عقد إيجار النشاط التجاري', activity: true }))
   return (
     <div className="fixed inset-0 z-[55] flex items-end justify-center bg-brand-deep/40 sm:items-center sm:p-4" onClick={onClose}>
       <div role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()} className="flex h-[88vh] w-full flex-col overflow-hidden rounded-t-card bg-white shadow-2xl sm:max-w-2xl sm:rounded-card">
@@ -307,6 +310,7 @@ function ActivityContractSheet({ asset, contract, payments, currency, onClose }:
           </button>
         </div>
       </div>
+      {leasePrint.ui}
     </div>
   )
 }

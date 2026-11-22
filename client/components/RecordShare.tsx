@@ -33,8 +33,14 @@ function LetterheadAsk({ onPick, onClose }: { onPick: (letterhead: boolean) => v
 
 export function RecordPreview({ doc, onClose }: { doc: RecordDoc; onClose: () => void }) {
   const { t, lang, dir } = useI18n()
-  const frame = useRef<HTMLIFrameElement>(null)
   const html = useMemo(() => buildRecordHtml(doc, { t, lang, dir, origin: window.location.origin }), [doc, t, lang, dir])
+  return <HtmlPreview title={doc.title} html={html} onClose={onClose} />
+}
+
+/** معاينة مستند HTML بحجم A4 وزر «طباعة / حفظ PDF» (TemplatePrintScreen). */
+export function HtmlPreview({ title, html, onClose }: { title: string; html: string; onClose: () => void }) {
+  const { t } = useI18n()
+  const frame = useRef<HTMLIFrameElement>(null)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
@@ -53,7 +59,7 @@ export function RecordPreview({ doc, onClose }: { doc: RecordDoc; onClose: () =>
           <X className="size-5" />
         </button>
         <p dir="auto" className="min-w-0 flex-1 truncate text-[15px] font-extrabold text-title">
-          {doc.title}
+          {title}
         </p>
         <button
           type="button"
@@ -69,7 +75,7 @@ export function RecordPreview({ doc, onClose }: { doc: RecordDoc; onClose: () =>
           <span>{t('طباعة / حفظ PDF')}</span>
         </button>
       </div>
-      <iframe ref={frame} title={doc.title} srcDoc={html} className="min-h-0 w-full flex-1 border-0 bg-[#E9EEED]" />
+      <iframe ref={frame} title={title} srcDoc={html} className="min-h-0 w-full flex-1 border-0 bg-[#E9EEED]" />
     </div>
   )
 }

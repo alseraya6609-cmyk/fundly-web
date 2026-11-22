@@ -195,6 +195,29 @@ export async function cancelContract(c: UnitContract, o: { notes: string; settle
   }
 }
 
+/**
+  _endEquipContract: عقد تأجير المركبة يُنهى (expired) ونهايته اليوم إن كانت
+  بعده، مع ملاحظات التسوية وتاريخها؛ فتصبح المركبة شاغرة.
+*/
+export async function endVehicleContract(c: UnitContract, o: { notes: string; settledMoney: boolean; withoutSettlement: boolean }) {
+  const today = isoDay(new Date())
+  const end = c.end_date ? c.end_date.slice(0, 10) : null
+  let notes = c.notes
+  if (isLeaseContract(c)) {
+    const lease = decodeLease(c.notes)
+    lease.contract[SETTLE_NOTES_KEY] = o.notes
+    lease.contract[CANCEL_DATE_KEY] = today
+    if (o.settledMoney) lease.contract[SETTLED_KEY] = 'نعم'
+    if (o.withoutSettlement) lease.contract[NO_SETTLEMENT_KEY] = 'نعم'
+    notes = encodeLease(lease)
+  } else if (o.settledMoney) notes = withSettledFlag(c.notes)
+  const { error } = await supabase
+    .from('property_unit_contracts')
+    .update({ status: 'expired', end_date: !end || end > today ? today : end, notes })
+    .eq('id', c.id)
+  if (error) throw error
+}
+
 /* ===== الدفعات يدويًا ===== */
 
 export type DueTotals = { overdue: number; overdueCount: number; dueToday: number; dueTodayCount: number; upcoming: number; upcomingCount: number; received: number; receivedCount: number; nextDue: string | null; grand: number }

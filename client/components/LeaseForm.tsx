@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Printer, Calculator, CheckSquare, Edit3, FileText, Landmark, Loader2, Pencil, Plus, Shield, Square, Trash2, User, Users, Wand2, X } from 'lucide-react'
+import { Printer, Calculator, Car, CheckSquare, Edit3, FileText, Landmark, Loader2, Pencil, Plus, Shield, Square, Trash2, User, Users, Wand2, X, ListChecks } from 'lucide-react'
 import { cn } from '@/lib/format'
 import { useI18n } from '@/lib/i18n'
 import { useCurrency, usePeopleAll, useStore, type Asset, type UnitContract } from '@/lib/data'
@@ -8,11 +8,17 @@ import { usePageContracts } from '@/lib/delegatedAssets'
 import { ACTIVITY_UNIT_KEY, activityMetaFromLease, activityReminders, createActivityAsset, createBranchAsset, mergeActivityMeta } from '@/lib/activityWrite'
 import { errorText, supabase } from '@/lib/supabase'
 import { AssetError } from '@/lib/assetWrite'
-import { splitLogs } from '@/lib/vehicleWrite'
+import { VEHICLE_UNIT_KEY, setVehicleTenant, splitLogs } from '@/lib/vehicleWrite'
 import { AREA_UNIT_KEY, INNER_FACILITIES_KEY, METER_FIELDS, setUnitStatus, setUnitsStatus, unitKey, type PropertyUnit } from '@/lib/propertyWrite'
 import {
   ACTIVITY_REMINDERS,
   ACTIVITY_REQUIRED,
+  DRIVER_KEY,
+  DRIVER_OPTIONS,
+  SUBJECT_VEHICLE,
+  VEHICLE_CONTRACT_FIELDS,
+  VEHICLE_REQUIRED,
+  VEHICLE_TERMS_FIELDS,
   LEGAL_FORMS,
   LICENSE_CLASSES,
   PURPOSES,
@@ -71,6 +77,7 @@ import {
   type Row,
 } from '@/lib/lease'
 import { Confirm } from './Confirm'
+import { leasePrintTitle, useLeasePrint } from './LeasePrint'
 import { Sheet } from './ui'
 
 /*
@@ -105,10 +112,13 @@ function leaseMetaOf(asset: Asset, unit: PropertyUnit): Row {
 /** expireId: عقد النشاط السابق يصبح «منتهيًا» بعد حفظ التجديد (_openActivityLease). */
 export type Renewal = { notes: string | null; start: Date; end: Date; oldNo: string; expireId?: string }
 
-type Mode = { multi?: { key: string; name: string }[]; activity?: { prefill?: string } }
+/** vehicle: عقد تأجير المركبة (_openEquipContractForm) — بيانات المركبة مكان العقار وبلا ممثل، و«شروط التأجير». */
+export type VehicleMode = { fields: string[]; values: Row; meta: Row; vehicleClass: string; template?: string }
+
+type Mode = { multi?: { key: string; name: string }[]; activity?: { prefill?: string }; vehicle?: VehicleMode }
 
 function initialLease(asset: Asset | undefined, unit: PropertyUnit | undefined, existing: UnitContract | undefined, renewal: Renewal | undefined, mode: Mode): Lease {
-  const l = decodeLease(existing?.notes ?? renewal?.notes ?? mode.activity?.prefill)
+  const l = decodeLease(existing?.notes ?? renewal?.notes ?? mode.activity?.prefill ?? mode.vehicle?.template)
   // التجديد: نسخة من السابق بلا تواريخه ورقمه وتوقيعه ودفعاته ورسومه.
   if (!existing && renewal) {
     const oldNo = (l.contract[K.newNo] ?? '').trim()
@@ -141,6 +151,12 @@ function initialLease(asset: Asset | undefined, unit: PropertyUnit | undefined, 
     if (!(l.tenant[K.name] ?? '') && (existing.tenant_name ?? '')) l.tenant[K.name] = existing.tenant_name!
     if (!(l.tenant[K.phone] ?? '') && (existing.tenant_phone ?? '')) l.tenant[K.phone] = existing.tenant_phone!
   }
+  if (mode.vehicle) {
+    l.contract[K.subject] = SUBJECT_VEHICLE
+    delete l.contract[K.purpose]
+    fillPropertyFrom(l, mode.vehicle.values)
+    return l
+  }
   if (mode.activity) {
     // التذكيران «قبل شهر» افتراضيًا في العقد الجديد.
     if (!existing) for (const key of [K.leaseReminder, K.licenseReminder]) if (!(l.license[key] ?? '').trim()) l.license[key] = 'قبل شهر'
@@ -172,6 +188,7 @@ export function LeaseForm({
   renewal,
   multi,
   activity,
+  vehicle,
   onClose,
   onDone,
 }: {
@@ -183,6 +200,7 @@ export function LeaseForm({
   multi?: { key: string; name: string }[]
   /** branch: «إضافة فرع» لنشاط رئيسي (_addBranch) — يُنشأ الفرع من رخصته عند الحفظ. */
   activity?: { classOptions: string[]; prefill?: string; branch?: { parent: Asset; count: number } }
+  vehicle?: VehicleMode
   onClose: () => void
   onDone: (message: string) => void
 }) {
@@ -192,12 +210,12 @@ export function LeaseForm({
   const store = useStore()
   const currency = useCurrency()
   const isMulti = !!multi && !existing
-  const key = unit ? unitKey(unit) : activity ? ACTIVITY_UNIT_KEY : ''
-  const unitName = unit?.name ?? (activity && asset ? asset.title : '')
+  const key = unit ? unitKey(unit) : activity ? ACTIVITY_UNIT_KEY : vehicle ? VEHICLE_UNIT_KEY : ''
+  const unitName = unit?.name ?? ((activity || vehicle) && asset ? asset.title : '')
   const branch = !asset ? activity?.branch : undefined
   const propertyTitle = asset?.title ?? (branch ? `${t('فرع جديد لنشاط:')} ${branch.parent.title}` : 'نشاط تجاري جديد')
   const numbers = useMemo(() => contractNumbers((contracts.data ?? []).filter((c) => !!asset && c.asset_id === asset.id), key, existing), [contracts.data, asset, key, existing])
-  const [lease, setLease] = useState<Lease>(() => initialLease(asset, unit, existing, renewal, { multi, activity }))
+  const [lease, setLease] = useState<Lease>(() => initialLease(asset, unit, existing, renewal, { multi, activity, vehicle }))
   const [chosen, setChosen] = useState<string[]>([])
   const chosenList = (multi ?? []).filter((u) => chosen.includes(u.key))
   const [lines, setLines] = useState<string[]>(() => {
@@ -233,6 +251,8 @@ export function LeaseForm({
   const [distributing, setDistributing] = useState(false)
   const [signing, setSigning] = useState(false)
   const [review, setReview] = useState<{ draft: boolean } | null>(null)
+  // طباعة العقد بكل إدخالاته على ورقة A4 (buildLeasePdf).
+  const leasePrint = useLeasePrint()
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   // نشاط أُنشئ ثم تعذّر حفظ عقده: لا يُنشأ مرة ثانية.
@@ -242,7 +262,9 @@ export function LeaseForm({
   /* ---------- الحقول ---------- */
   const fieldInput = (scope: Scope, spec: FieldSpec) => {
     const s = storeOf(lease, scope)
-    const required = ((activity ? ACTIVITY_REQUIRED : CONTRACT_REQUIRED)[scope] ?? []).includes(spec.key)
+    const required = vehicle
+      ? (VEHICLE_REQUIRED[scope] ?? []).includes(spec.key) || (scope !== 'property' && (CONTRACT_REQUIRED[scope] ?? []).includes(spec.key))
+      : ((activity ? ACTIVITY_REQUIRED : CONTRACT_REQUIRED)[scope] ?? []).includes(spec.key)
     const label = (
       <span className="text-[12px] font-bold text-sub">
         {t(spec.label)}
@@ -267,6 +289,14 @@ export function LeaseForm({
               </option>
             ))}
           </select>
+        </label>
+      )
+    }
+    if (spec.time) {
+      return (
+        <label className="flex flex-col gap-1">
+          {label}
+          <input type="time" value={s[spec.key] ?? ''} onChange={(e) => set(e.target.value)} className={inputClass} />
         </label>
       )
     }
@@ -602,6 +632,9 @@ export function LeaseForm({
         const leaseMeta = activityMetaFromLease(l)
         await activityReminders(assetId!, createdTitle || asset?.title || subjectName, leaseMeta)
         if (asset) await mergeActivityMeta(asset.id, leaseMeta).catch(() => {})
+      } else if (vehicle) {
+        // المستأجر على المركبة نفسها كما في التطبيق.
+        await setVehicleTenant(assetId!, (saved.tenant_name ?? '').trim()).catch(() => {})
       } else if (isMulti) {
         await setUnitsStatus(assetId!, chosenList.map((u) => u.key), saved.status === 'pending' ? 'مسودة' : 'مؤجرة').catch(() => {})
       } else await setUnitStatus(assetId!, key, saved.status === 'pending' ? 'مسودة' : 'مؤجرة').catch(() => {})
@@ -627,7 +660,9 @@ export function LeaseForm({
     }
   }
 
-  const title = renewal ? 'تجديد العقد' : multi && !existing ? 'عقد متعدد الوحدات' : branch ? 'عقد إيجار الفرع' : activity ? 'عقد إيجار النشاط' : 'عقد الإيجار'
+  const title = renewal ? 'تجديد العقد' : vehicle ? `${t('عقد تأجير')} ${t(vehicle.vehicleClass)}` : multi && !existing ? 'عقد متعدد الوحدات' : branch ? 'عقد إيجار الفرع' : activity ? 'عقد إيجار النشاط' : 'عقد الإيجار'
+  const printTitle = activity ? title : leasePrintTitle(lease, false, title)
+  const vehicleMeta = vehicle?.meta
   const payDue = (row: Row) => {
     const cheque = (row[K.collectMethod] ?? '') === 'شيك' ? (row[K.paymentChequeDate] ?? '').trim() : ''
     const due = cheque || (row[K.paymentDue] ?? '').trim()
@@ -639,9 +674,10 @@ export function LeaseForm({
       <div role="dialog" aria-modal="true" className="flex h-[96vh] w-full flex-col overflow-hidden rounded-t-card bg-page shadow-2xl sm:h-[92vh] sm:max-w-3xl sm:rounded-card">
         <div className="flex items-center justify-between gap-2 border-b border-line bg-white px-4 py-3">
           <p className="min-w-0 flex-1 text-[17px] font-extrabold text-title">{t(title)}</p>
-          <button type="button" onClick={() => printText(t(title), shareText(lease))} aria-label={t('طباعة العقد')} title={t('طباعة العقد')} className="grid size-9 place-items-center rounded-full bg-surface text-brand">
+          <button type="button" onClick={() => leasePrint.open({ lease, title: printTitle, activity: !!activity, assetMeta: vehicleMeta })} aria-label={t('طباعة العقد')} title={t('طباعة العقد')} className="grid size-9 place-items-center rounded-full bg-surface text-brand">
             <Printer className="size-4" />
           </button>
+          {leasePrint.ui}
           <button type="button" onClick={onClose} aria-label={t('إغلاق')} className="grid size-9 place-items-center rounded-full bg-surface text-body">
             <X className="size-4" />
           </button>
@@ -664,6 +700,10 @@ export function LeaseForm({
               ) : activity && unitName ? (
                 <p dir="auto" className="text-[12.5px] font-bold text-sub">
                   {t('النشاط')}: {unitName}
+                </p>
+              ) : vehicle && unitName ? (
+                <p dir="auto" className="text-[12.5px] font-bold text-sub">
+                  {t('المركبة')}: {unitName}
                 </p>
               ) : null}
             </div>
@@ -742,6 +782,35 @@ export function LeaseForm({
                 </div>,
               )}
             </>
+          ) : vehicle ? (
+            <>
+              {card(
+                'بيانات عقد الإيجار',
+                FileText,
+                <div className="grid grid-cols-2 gap-2.5">
+                  {VEHICLE_CONTRACT_FIELDS.map((spec) => (
+                    <div key={spec.key} className={spec.key === K.termMode ? 'col-span-2' : ''}>
+                      {fieldInput('contract', spec)}
+                    </div>
+                  ))}
+                </div>,
+                // بسائق أو بدون سائق بجانب العنوان (_driverPicker).
+                <select
+                  aria-label={t('بسائق أو بدون سائق')}
+                  value={lease.contract[DRIVER_KEY] ?? ''}
+                  onChange={(e) => update((l) => void (l.contract[DRIVER_KEY] = e.target.value))}
+                  className={cn('h-8 rounded-full border px-2 text-[11.5px] font-extrabold outline-none', (lease.contract[DRIVER_KEY] ?? '') ? 'border-brand bg-brand-soft text-brand' : 'border-danger text-danger')}
+                >
+                  <option value="">{t('بسائق أو بدون سائق')} *</option>
+                  {DRIVER_OPTIONS.map((o) => (
+                    <option key={o} value={o}>
+                      {t(o)}
+                    </option>
+                  ))}
+                </select>,
+              )}
+              {section('بيانات المركبة', Car, 'property', vehicle.fields.map((k) => ({ key: k, label: k })))}
+            </>
           ) : (
             <>
               {section('بيانات عقد الإيجار', FileText, 'contract', CONTRACT_FIELDS)}
@@ -750,7 +819,8 @@ export function LeaseForm({
           )}
           {section('بيانات المؤجر', Landmark, 'lessor', LESSOR_FIELDS, K.name)}
           {section('بيانات المستأجر', User, 'tenant', TENANT_FIELDS, K.name)}
-          {!activity && section('بيانات ممثل المستأجر', User, 'rep', REP_FIELDS, K.repName)}
+          {!activity && !vehicle && section('بيانات ممثل المستأجر', User, 'rep', REP_FIELDS, K.repName)}
+          {vehicle && section('شروط التأجير', ListChecks, 'contract', VEHICLE_TERMS_FIELDS)}
           {rowsCard({
             title: 'قيمة التأمين على العين',
             Icon: Shield,

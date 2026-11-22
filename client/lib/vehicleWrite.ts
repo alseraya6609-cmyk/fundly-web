@@ -371,3 +371,16 @@ export async function updateVehicle(assetId: string, draft: VehicleDraft, contra
   }
   throw new AssetError('تغيّرت البيانات أثناء الحفظ — أعد المحاولة')
 }
+
+/** _kEquipUnitKey: عقود تأجير المركبة على «الوحدة» equipment. */
+export const VEHICLE_UNIT_KEY = 'equipment'
+
+/** بعد حفظ عقد التأجير: المستأجر على المركبة (_item.copyWith(tenant)). */
+export async function setVehicleTenant(assetId: string, tenant: string) {
+  if (!tenant || tenant === 'بلا اسم') return
+  const { data, error } = await supabase.from('project_assets').select('tenant').eq('id', assetId).maybeSingle()
+  if (error) throw error
+  if (!data || (data as { tenant: string | null }).tenant === tenant) return
+  const { error: saveError } = await supabase.from('project_assets').update({ tenant }).eq('id', assetId)
+  if (saveError) throw saveError
+}

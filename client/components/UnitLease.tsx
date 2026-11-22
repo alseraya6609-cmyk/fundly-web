@@ -13,6 +13,7 @@ import {
   EXTEND_PRESETS,
   PAY_KINDS,
   cancelContract,
+  endVehicleContract,
   cancelSummary,
   contractEnded,
   customExtend,
@@ -368,6 +369,7 @@ export function ExtendFlow({ contract, onClose, onDone }: { contract: UnitContra
 export function CancelContractFlow({
   asset,
   unit,
+  vehicle = false,
   contract,
   payments,
   confirmed = false,
@@ -375,7 +377,9 @@ export function CancelContractFlow({
   onDone,
 }: {
   asset: Asset
-  unit: PropertyUnit
+  /** بلا وحدة في عقد تأجير المركبة (_endEquipContract). */
+  unit?: PropertyUnit
+  vehicle?: boolean
   contract: UnitContract
   payments: UnitPayment[]
   confirmed?: boolean
@@ -386,7 +390,7 @@ export function CancelContractFlow({
   const qc = useQueryClient()
   const currency = useCurrency()
   const contracts = usePageContracts()
-  const sum = cancelSummary(contract, payments, unit.extras)
+  const sum = cancelSummary(contract, payments, unit?.extras ?? {})
   const [notes, setNotes] = useState('')
   const [settledMoney, setSettledMoney] = useState(false)
   const [choice, setChoice] = useState<{ without: boolean } | null>(null)
@@ -399,10 +403,22 @@ export function CancelContractFlow({
     setBusy(true)
     setError('')
     try {
-      await cancelContract(contract, { notes: notes.trim(), settledMoney: without ? false : settledMoney, withoutSettlement: without }, contracts.data ?? [])
-      await setUnitStatus(asset.id, unitKey(unit), 'شاغرة').catch(() => {})
+      const o = { notes: notes.trim(), settledMoney: without ? false : settledMoney, withoutSettlement: without }
+      if (vehicle) await endVehicleContract(contract, o)
+      else {
+        await cancelContract(contract, o, contracts.data ?? [])
+        if (unit) await setUnitStatus(asset.id, unitKey(unit), 'شاغرة').catch(() => {})
+      }
       await Promise.all(['assets', 'unit-contracts', 'unit-payments'].map((k) => qc.invalidateQueries({ queryKey: [k] })))
-      onDone(without ? 'أُلغي العقد بدون تسوية وأصبحت الوحدة شاغرة — المستحقات في «السجل التاريخي» للمتابعة' : 'أُلغي العقد وأصبحت الوحدة شاغرة')
+      onDone(
+        vehicle
+          ? without
+            ? 'أُلغي العقد بدون تسوية وأصبحت المركبة شاغرة — المستحقات في «السجل التاريخي» للمتابعة'
+            : 'أُلغي العقد وأصبحت المركبة شاغرة'
+          : without
+            ? 'أُلغي العقد بدون تسوية وأصبحت الوحدة شاغرة — المستحقات في «السجل التاريخي» للمتابعة'
+            : 'أُلغي العقد وأصبحت الوحدة شاغرة',
+      )
     } catch (e) {
       setError(`${t('تعذر إلغاء العقد:')} ${errorText(e)}`)
       setChoice(null)
@@ -481,7 +497,7 @@ export function CancelContractFlow({
 }
 
 /** _openPaymentForm: نوع البند واسمه وتاريخه والمستحق والمسدد والمرجع. */
-function PaymentForm({ contractId, existing, onClose, onDone }: { contractId: string; existing: UnitPayment | null; onClose: () => void; onDone: () => void }) {
+export function PaymentForm({ contractId, existing, onClose, onDone }: { contractId: string; existing: UnitPayment | null; onClose: () => void; onDone: () => void }) {
   const { t } = useI18n()
   const extra = payExtra(existing?.notes ?? null)
   const [kind, setKind] = useState(extra[PAY.kind] || PAY.rent)

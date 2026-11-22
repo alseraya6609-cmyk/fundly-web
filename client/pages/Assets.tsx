@@ -29,6 +29,7 @@ import { CancelContractFlow, UnitLeaseBox, currentContract } from '@/components/
 import { contractClosed } from '@/lib/leaseActions'
 import { ActivityLeaseBox, activityPrefill, branchPrefill } from '@/components/ActivityLease'
 import { ActivityBranches, ActivityEditSheet, ActivityEmployees } from '@/components/ActivityParts'
+import { VehicleLeaseBox, vehicleLeaseMode, vehicleTermsTemplate } from '@/components/VehicleLease'
 import { branchesOf, isBranch } from '@/lib/activityWrite'
 import { ACTIVITY_TYPES } from '@/lib/lease'
 import { splitLogs as splitAssetLogs } from '@/lib/vehicleWrite'
@@ -84,6 +85,7 @@ export default function Assets() {
   const [editing, setEditing] = useState<{ asset: Asset; type?: string; focusKey?: string } | null>(null)
   const [editingActivity, setEditingActivity] = useState<Asset | null>(null)
   const [addingBranch, setAddingBranch] = useState<Asset | null>(null)
+  const [vehicleLease, setVehicleLease] = useState<{ asset: Asset; existing?: UnitContract; renewal?: Renewal } | null>(null)
 
   if (moduleHidden(hidden, 'assets')) {
     return (
@@ -238,6 +240,16 @@ export default function Assets() {
                 onDone={flash}
               />
             )}
+            {assetGroup(open.category) === 'equipment' && (
+              <VehicleLeaseBox
+                asset={open}
+                editable={!isCancelledAsset(open) && open.status !== ARCHIVED && canWrite(openDelegation)}
+                canAdd={canAdd(openDelegation)}
+                onLease={(existing) => setVehicleLease({ asset: open, existing })}
+                onRenew={(_, renewal) => setVehicleLease({ asset: open, renewal })}
+                onDone={flash}
+              />
+            )}
             {assetGroup(open.category) === 'activity' && !isBranch(open) && (
               <ActivityBranches
                 branches={branchesOf(visible, open.id)}
@@ -254,9 +266,9 @@ export default function Assets() {
             <p className="mt-5 rounded-inner bg-surface px-4 py-3 text-[12px] text-sub">
               {t(
                 assetGroup(open.category) === 'equipment'
-                  ? 'عقود تأجير المركبة والتفويض من التطبيق حاليًا.'
+                  ? 'سند القبض والمطالبة المالية للمركبة من التطبيق حاليًا.'
                   : open.category === 'real_estate'
-                    ? 'نموذج العقد الرسمي PDF من التطبيق حاليًا.'
+                    ? 'مستندات العقار المرفقة بالعقد من التطبيق حاليًا.'
                     : 'أصول النشاط ومعداته وعملاؤه وموردوه من التطبيق حاليًا.',
               )}
             </p>
@@ -305,6 +317,20 @@ export default function Assets() {
           onClose={() => setAddingBranch(null)}
           onDone={(m) => {
             setAddingBranch(null)
+            flash(m)
+          }}
+        />
+      )}
+      {vehicleLease && (
+        <LeaseForm
+          asset={vehicleLease.asset}
+          propertyType=""
+          existing={vehicleLease.existing}
+          renewal={vehicleLease.renewal}
+          vehicle={vehicleLeaseMode(vehicleLease.asset, vehicleLease.existing || vehicleLease.renewal ? undefined : vehicleTermsTemplate(vehicleLease.asset))}
+          onClose={() => setVehicleLease(null)}
+          onDone={(m) => {
+            setVehicleLease(null)
             flash(m)
           }}
         />
