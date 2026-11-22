@@ -110,7 +110,7 @@ async function rows<T>(query: PromiseLike<{ data: T[] | null; error: unknown }>)
 // يملكه المستخدم وما شاركه معه غيره (عهدة أو دين أُسند إليه، التزام مشترك
 // دُعي إليه). ثم تُطبَّق قواعد التطبيق على ما يظهر.
 
-const ENTRY_COLUMNS = 'id, user_id, category, entry_type, title, amount, due_date, status, details, attachment_url, created_at, updated_at'
+export const ENTRY_COLUMNS = 'id, user_id, category, entry_type, title, amount, due_date, status, details, attachment_url, created_at, updated_at'
 export const ARCHIVED = 'مؤرشف'
 
 /** ‏قائمة أرقام FND محفوظة نصًا في details (SharedMemberState.ids). */

@@ -1,6 +1,7 @@
 import { supabase } from './supabase'
 import type { Entry } from './data'
-import { POT, cycleComplete, cycleShareOf, hasBudget, iAmManager, memberNames, memberPaid, paidBy, parseMoney, remaining, roscaParseDate, roscaPlan, settlements, settleTransfers, withoutFnd } from './shared'
+import { POT, balances, cycleCollected, cycleComplete, cycleShareOf, expenses, hasBudget, iAmManager, memberNames, memberNets, memberPaid, members as membersOf, paidBy, parseMoney, remaining, roscaParseDate, roscaPlan, settlements, settleTransfers, withoutFnd } from './shared'
+import { stampInvites } from './requestsWrite'
 
 /*
   أرشفة الالتزام المشترك وإخراجه من الأرشيف كما في التطبيق
@@ -11,7 +12,7 @@ import { POT, cycleComplete, cycleShareOf, hasBudget, iAmManager, memberNames, m
   الكتابة على أحدث نسخة في الخادم، للتفاصيل أو الحالة وحدها، وبشرط ألا يكون
   السجل تغيّر منذ قراءته.
 
-  الحذف والمغادرة والإلغاء (التسوية والسجل التاريخي وسبب الحذف) من التطبيق.
+  الحذف والمغادرة والإلغاء والسجل التاريخي في آخر الملف (_deleteFlow).
 */
 
 const ARCHIVED_KEY = 'مؤرشف عند'
@@ -649,38 +650,197 @@ function removedByAll(details: Record<string, string>): boolean {
 }
 const CREATOR_ID_KEY = 'معرف المنشئ'
 
-/**
-  فيه أعضاء آخرون: يُحذف من عندي وحدي («محذوف عند»)، ويبقى عندهم ويصلهم
-  إشعار، وآخر من يحذفه يحذفه من الخادم. بلا أعضاء آخرين: حذف نهائي.
-  يعيد true إن حُذف من عندي وحدي.
+
+
+// ---------------- الحذف والمغادرة والإلغاء والسجل التاريخي (_deleteFlow) ----------------
+/*
+  كما في التطبيق:
+  - حساب لم يُسوَّ (_hasUnsettled) لا يُمسح: ينتقل إلى «السجل التاريخي»
+    عندي («سجل تاريخي عند») أو يسوّى الآن.
+  - المسؤول: سبب حذف إلزامي. مع أعضاء آخرين يُلغى عندهم («ملغاة» +
+    «سبب الإلغاء» + حدث في «سجل الأحداث») ثم يُحذف من عندي؛ ووحده ينتقل إلى
+    «المحذوفة عندي» (سلة المهملات).
+  - العضو: «مغادرة المشاركة» (من عندي) بعد تسوية رصيده؛ والملغى: «موافق على
+    الحذف» أو «أرشفة عندي».
+  - آخر من يحذفه يحذفه من الخادم (purgeIfRemovedByAll).
 */
-export async function deleteShared(entry: Entry, me: string): Promise<boolean> {
-  if (!me) throw new SharedError('تعذر حذف الالتزام. حاول مرة أخرى.')
+
+export const HISTORY_KEY = 'سجل تاريخي عند'
+export const CANCEL_REASON_KEY = 'سبب الإلغاء'
+
+export const isCancelledShared = (e: Entry) => e.status === 'ملغاة' || e.status === 'ملغية'
+export const inHistoryForMe = (e: Entry, me: string) => !!me && idsIn(asStrings(e.details), HISTORY_KEY).has(me)
+export const removedForMe = (e: Entry, me: string) => !!me && idsIn(asStrings(e.details), REMOVED_KEY).has(me)
+
+/** _hasUnsettled: مبالغ معلّقة، وفي الجمعية دورات بدأت ولم تكتمل وتُسلَّم كلها. */
+export function hasUnsettled(e: Entry): boolean {
+  const details = e.details ?? {}
+  const names = memberNames(details)
+  if (isCircleType(e.entry_type)) {
+    const cycles = roscaPlan(details, names).cycles
+    const started = cycles.some((c) => cycleCollected(c) > 0.01 || c.payoutDate.trim() !== '')
+    const finished = cycles.length > 0 && cycles.every((c) => cycleComplete(c) && c.payoutDate.trim() !== '')
+    return started && !finished
+  }
+  return settleTransfers(details, names).length > 0
+}
+
+/** رصيدي لم يُسوَّ (للمغادرة): في الجمعية كل الحساب، وفي غيرها صافيّ. */
+export function myAccountOpen(e: Entry, myName: string | null): boolean {
+  if (isCircleType(e.entry_type)) return hasUnsettled(e)
+  if (!myName) return false
+  return Math.abs(memberNets(e.details ?? {}, [myName])[myName] ?? 0) > 0.01
+}
+
+/** SharedMemberState.markMine: رقمي في [key] أو خارجه، على أحدث نسخة. يعيد false إن لم يعد موجودًا. */
+export async function markMine(entry: Entry, key: string, me: string, add: boolean): Promise<boolean> {
+  if (!me) throw new SharedError('تعذّر الحفظ. حاول مرة أخرى.')
   for (let attempt = 0; attempt < 4; attempt++) {
     const { data, error } = await supabase.from('shared_entries').select('id, status, details, updated_at').eq('id', entry.id).maybeSingle()
     if (error) throw error
     if (!data) return false
     const row = data as Row
     const details = asStrings(row.details)
-    if (!sharedWithOthers(details, me)) {
-      const { error: deleteError } = await supabase.from('shared_entries').delete().eq('id', row.id)
-      if (deleteError) throw deleteError
-      return false
-    }
-    const set = idsIn(details, REMOVED_KEY)
-    set.add(me)
-    const nextDetails = { ...details, [REMOVED_KEY]: JSON.stringify([...set].sort()) }
+    const set = idsIn(details, key)
+    if (add) set.add(me)
+    else set.delete(me)
+    const value = JSON.stringify([...set].sort())
     const { data: saved, error: saveError } = await supabase
       .from('shared_entries')
-      .update({ details: { ...row.details, [REMOVED_KEY]: nextDetails[REMOVED_KEY] } })
+      .update({ details: { ...row.details, [key]: value } })
       .eq('id', row.id)
       .eq('updated_at', row.updated_at)
       .select('id')
     if (saveError) throw saveError
-    if (!saved || saved.length === 0) continue
-    // آخر عضو حذفه: يُحذف من الخادم (ينجح للمالك فقط حسب الصلاحيات).
-    if (removedByAll(nextDetails)) await supabase.from('shared_entries').delete().eq('id', row.id)
+    if (!saved || !saved.length) continue
+    if (add && key === REMOVED_KEY && removedByAll({ ...details, [key]: value })) await supabase.from('shared_entries').delete().eq('id', row.id)
     return true
   }
   throw new SharedError('تغيّرت البيانات أثناء الحفظ — أعد المحاولة')
+}
+
+/** المسؤول مع أعضاء آخرين: «ملغاة» عند الجميع بسببه وحدث في السجل، ثم من عندي. */
+export async function cancelSharedForAll(entry: Entry, me: string, actor: string, why: string, tr: (s: string) => string) {
+  const reason = why.trim()
+  if (!reason) throw new SharedError('اكتب سبب الحذف')
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const { data, error } = await supabase.from('shared_entries').select('id, status, details, updated_at').eq('id', entry.id).maybeSingle()
+    if (error) throw error
+    if (!data) throw new SharedError('لم يعد هذا الالتزام موجودًا')
+    const row = data as Row
+    const details = asStrings(row.details)
+    const changed = { [CANCEL_REASON_KEY]: reason, [EVENTS_KEY]: withEvent(details, `${withoutFnd(actor) || actor} ${tr('ألغى الالتزام')}: ${reason}`) }
+    const { data: saved, error: saveError } = await supabase
+      .from('shared_entries')
+      .update({ status: 'ملغاة', details: { ...row.details, ...changed } })
+      .eq('id', row.id)
+      .eq('updated_at', row.updated_at)
+      .select('id')
+    if (saveError) throw saveError
+    if (saved && saved.length) {
+      await markMine(entry, REMOVED_KEY, me, true)
+      return
+    }
+  }
+  throw new SharedError('تغيّرت البيانات أثناء الحفظ — أعد المحاولة')
+}
+
+// ---------------- انضمام عضو ومغادرته بتاريخ (_memberJoin / _memberLeave) ----------------
+
+type MemberDates = Record<string, Record<string, string>>
+function memberDatesOf(details: Record<string, string>): MemberDates {
+  try {
+    const decoded = JSON.parse(details[MEMBER_DATES_KEY] || '{}')
+    if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) return {}
+    const out: MemberDates = {}
+    for (const [k, v] of Object.entries(decoded)) if (v && typeof v === 'object') out[k] = Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([a, b]) => [a, String(b ?? '')]))
+    return out
+  } catch {
+    return {}
+  }
+}
+const dayText = (d: Date) => `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}`
+export const leaveOf = (details: Record<string, unknown>, member: string) => memberDatesOf(asStrings(details))[member]?.leave ?? ''
+export const joinOf = (details: Record<string, unknown>, member: string) => memberDatesOf(asStrings(details))[member]?.join ?? ''
+
+/** اسم المسؤول (_managerName). */
+export function managerNameOf(details: Record<string, unknown>): string {
+  const m = membersOf(details).find((x) => x.role === 'مسؤول')
+  if (m) return m.name.trim()
+  return String(details['مدير الرحلة'] ?? details['المسؤول'] ?? '').trim()
+}
+
+/** من يمكن تسجيل مغادرته: غير المسؤول ولم يغادر. */
+export function leaveCandidates(details: Record<string, unknown>): string[] {
+  const manager = managerNameOf(details)
+  return memberNames(details).filter((n) => n.trim() !== manager && !leaveOf(details, n.trim()))
+}
+
+/** مصروفات تشمله بعد المغادرة أو معلّقة (تُعدَّل أولًا). */
+export function leaveBlocking(details: Record<string, unknown>, name: string, day: Date): number {
+  const only = new Date(day.getFullYear(), day.getMonth(), day.getDate())
+  return expenses(details).filter((e) => {
+    if (!(e.participants.includes(name) || e.payer === name)) return false
+    if (e.status === 'بانتظار الموافقة') return true
+    const at = parseDmy(e.date)
+    return e.status === 'معتمد' && !!at && at > only
+  }).length
+}
+
+/** رصيد العضو الخام (له موجب، عليه سالب). */
+export const rawBalanceOf = (details: Record<string, unknown>, name: string) => balances(details, memberNames(details))[name] ?? 0
+
+export async function recordMemberLeave(entry: Entry, name: string, day: Date, settle: boolean, tr: (s: string) => string) {
+  await mutateShared(entry, (details) => {
+    if (leaveBlocking(details, name, day) > 0) throw new SharedError('مصروفات تشمله بعد تاريخ المغادرة أو بانتظار الموافقة')
+    const dates = memberDatesOf(details)
+    dates[name] = { ...(dates[name] ?? {}), leave: dayText(day) }
+    const changed: Record<string, string> = { [MEMBER_DATES_KEY]: JSON.stringify(dates) }
+    if (settle) {
+      const net = rawBalanceOf(details, name)
+      if (Math.abs(net) > 0.01) {
+        const owes = net < -0.01
+        const party = isLumpSum(details) ? POT : managerNameOf(details)
+        const now = new Date()
+        const list = settlements(details).map((x) => {
+          const row: Record<string, unknown> = { id: x.id, from: x.from, to: x.to, amount: x.amount, date: x.date, note: x.note }
+          if (x.receipt) row.receipt = x.receipt
+          return row
+        })
+        list.push({ id: String(now.getTime()), from: owes ? name : party, to: owes ? party : name, amount: Math.abs(net), date: dayText(now), note: tr('تسوية عند المغادرة') })
+        changed[SETTLEMENTS_KEY] = JSON.stringify(list)
+      }
+    }
+    return changed
+  })
+}
+
+export async function recordMemberJoin(entry: Entry, name: string, day: Date) {
+  const clean = name.trim()
+  if (!clean) return
+  await mutateShared(entry, (details) => {
+    const dates = memberDatesOf(details)
+    dates[clean] = { join: dayText(day) }
+    let changed: Record<string, string> = { [MEMBER_DATES_KEY]: JSON.stringify(dates) }
+    const list = membersOf(details)
+    if (!list.some((m) => m.name.trim() === clean)) {
+      const names = (details['الأعضاء / المشتركين'] ?? '')
+        .split('،')
+        .map((x) => x.trim())
+        .filter(Boolean)
+      names.push(clean)
+      changed['الأعضاء'] = JSON.stringify([...list.map((m) => ({ name: m.name, role: m.role })), { name: clean, role: 'عضو' }])
+      changed['الأعضاء / المشتركين'] = names.join('، ')
+      const stamped = stampInvites({ ...details, ...changed })
+      if (stamped['وقت دعوة الأعضاء'] !== details['وقت دعوة الأعضاء']) changed = { ...changed, 'وقت دعوة الأعضاء': stamped['وقت دعوة الأعضاء'] }
+    }
+    return changed
+  })
+}
+
+/** المحذوفة عندي: حذفها كل الأعضاء ← تُحذف من الخادم (purgeIfRemovedByAll). يعيد true إن حُذفت. */
+export async function purgeIfRemovedByAll(entry: Entry): Promise<boolean> {
+  if (!removedByAll(asStrings(entry.details))) return false
+  const { data } = await supabase.from('shared_entries').delete().eq('id', entry.id).select('id')
+  return !!data && data.length > 0
 }

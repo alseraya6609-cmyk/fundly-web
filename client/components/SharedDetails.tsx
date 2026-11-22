@@ -5,12 +5,15 @@ import { useStore, type Entry } from '@/lib/data'
 import { errorText } from '@/lib/supabase'
 import { publicName as publicNameOf } from '@/lib/requestsWrite'
 import {
+  LEDGER_TYPES,
   SharedError,
   addContribution,
   addRoscaPayment,
   decideLedgerItem,
   deleteRoscaPayment,
   isLumpSum,
+  joinOf,
+  leaveOf,
   payoutUnpaid,
   recordSettlements,
   roscaChangeReceiver,
@@ -21,6 +24,7 @@ import {
 import { FileError, uploadDeviceFile } from '@/lib/files'
 import { Confirm } from './Confirm'
 import { Sheet } from './ui'
+import { MemberDatesActions } from './SharedLifecycle'
 import { useI18n } from '@/lib/i18n'
 import { useSession } from '@/lib/session'
 import { date, money } from '@/lib/format'
@@ -63,7 +67,7 @@ const STATUS_COLOR: Record<string, string> = {
   قادمة: '#8C9A97',
 }
 
-function Block({ title, count, children }: { title: string; count?: number; children: ReactNode }) {
+function Block({ title, count, action, children }: { title: string; count?: number; action?: ReactNode; children: ReactNode }) {
   const { t } = useI18n()
   return (
     <div className="mt-5">
@@ -71,6 +75,7 @@ function Block({ title, count, children }: { title: string; count?: number; chil
         <span className="h-4 w-1 rounded-full bg-gold" />
         {t(title)}
         {count !== undefined && <span className="rounded-full bg-surface px-2 text-[11px] text-sub">{count}</span>}
+        {action && <span className="ms-auto">{action}</span>}
       </p>
       <div className="flex flex-col gap-2 rounded-inner bg-surface p-2">{children}</div>
     </div>
@@ -172,7 +177,11 @@ export function SharedDetails({
   return (
     <div>
       {list.length > 0 && (
-        <Block title="الأعضاء" count={list.length}>
+        <Block
+          title="الأعضاء"
+          count={list.length}
+          action={entry && !isCircle && LEDGER_TYPES.includes(entryType) ? <MemberDatesActions entry={entry} currency={currency} onChanged={(m) => onChanged?.(m)} /> : undefined}
+        >
           {list.map((m, i) => {
             const id = fndIn(m.name)
             const reply = id ? replies[id]?.state : ''
@@ -186,6 +195,8 @@ export function SharedDetails({
                 <span className="text-[11px] text-muted">
                   {t(m.role)}
                   {state ? ` · ${t(state)}` : ''}
+                  {joinOf(details, m.name.trim()) ? ` · ${t('انضم')} ${joinOf(details, m.name.trim())}` : ''}
+                  {leaveOf(details, m.name.trim()) ? ` · ${t('غادر')} ${leaveOf(details, m.name.trim())}` : ''}
                 </span>
               </div>
             )
@@ -296,7 +307,7 @@ export function ReceiptPicker({ file, onChange, label }: { file: File | null; on
 }
 
 /** «تسوية الحساب» (_openSettleUpSheet): التحويلات المقترحة، وتسجيل تحويلات الأعضاء المختارين. */
-function SettleForm({
+export function SettleForm({
   entry,
   details,
   names,

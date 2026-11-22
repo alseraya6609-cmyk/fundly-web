@@ -56,7 +56,7 @@ const fromInputDate = (value: string) => {
 const shown = (n: string) => withoutFnd(n) || n
 
 /** _pickSharedPerson: بالرقم التعريفي، أو من الأفراد، أو اسم جديد. */
-function MemberPicker({ open, me, exclude, onPick, onClose }: { open: boolean; me: string; exclude: string[]; onPick: (name: string) => void; onClose: () => void }) {
+export function MemberPicker({ open, me, exclude, onPick, onClose }: { open: boolean; me: string; exclude: string[]; onPick: (name: string) => void; onClose: () => void }) {
   const { t } = useI18n()
   const people = usePeople()
   const [fnd, setFnd] = useState('')
