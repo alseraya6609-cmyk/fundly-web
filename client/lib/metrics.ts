@@ -13,15 +13,29 @@ import {
   type Entry,
 } from './data'
 import { useSession } from './session'
+import { useCurrency, useStore } from './data'
+import {
+  approvedExpenses,
+  budget as sharedBudget,
+  contributions as sharedContributions,
+  expenses as sharedExpenses,
+  hasPot,
+  iAmManager,
+  memberNames,
+  memberPaid,
+  remaining as sharedRemaining,
+  roscaPlan,
+  total as sharedTotal,
+  withoutFnd,
+} from './shared'
 
 /*
   نقل HomeDashboardService.loadMetrics من التطبيق (lib/data/home_dashboard_service.dart)
   ومعه دوال lib/data/entry_status.dart: نفس القواعد ونفس الأرقام في بطاقات
   الرئيسية («مالية تحتاج متابعة» و«مستندات تحتاج متابعة») ونفس بنود الكلندر.
 
-  ما لم يُنقل بعد: خطة دورات الجمعية (RoscaLedger) — يُستعمل تاريخ الالتزام
-  نفسه كما يفعل التطبيق حين تتعذر الخطة — وتنبيهات اعتماد الصرف والميزانية
-  وتأخر المساهمات في المشتركة.
+  ومعه sharedAlertItems (shared_alerts.dart): المتابعات والمستندات، دورة
+  الجمعية الجارية وتأخر المساهمات، اعتماد الصرف، وتنبيه الميزانية.
 */
 
 export type CalItem = {
@@ -300,6 +314,8 @@ export function useMetrics(): { loading: boolean; metrics: Metrics } {
   const reminders = useSavedReminders()
   const records = useCalendarRecords()
   const delegations = useDelegations()
+  const store = useStore()
+  const defaultCurrency = useCurrency()
 
   const loading = [personal, shared, assets, people, records].some((q) => q.isLoading)
 
@@ -418,6 +434,11 @@ export function useMetrics(): { loading: boolean; metrics: Metrics } {
     }
 
     // ---- الالتزامات المشتركة.
+    const myNames = [str(store.data?.['settings_profile_name']), str(store.data?.['settings_shared_nickname'])].filter(Boolean)
+    const plain = (v: number) => {
+      const x = Math.round(Math.abs(v) * 100) / 100
+      return x % 1 === 0 ? x.toFixed(0) : x.toFixed(2)
+    }
     let sharedMoney = 0
     let sharedDocs = 0
     for (const e of shared.data ?? []) {
@@ -425,8 +446,13 @@ export function useMetrics(): { loading: boolean; metrics: Metrics } {
       const open =
         e.status !== 'مكتملة' && e.status !== 'مؤرشف' && e.status !== 'ملغاة' && !hasMine(d, 'مؤرشف عند', fnd)
       const name = e.title.trim() || e.entry_type
+      const to = `/shared?open=${e.id}`
+      const isCircle = e.entry_type === 'جمعية مالية' || e.entry_type === 'جمعية'
+      const names = memberNames(d)
+      const plan = isCircle ? roscaPlan(d, names) : null
       if (open && e.entry_type === 'جمعية مالية') {
-        const due = parseDay(e.due_date)
+        // موعد الدورة الجارية، وإلا تاريخ الالتزام.
+        const due = plan?.current?.dueDate ?? parseDay(e.due_date)
         if (due && dayDiff(today, due) <= 7) sharedMoney += 1
       }
       if (open && jsonList(d['مستندات']).some((doc) => {
@@ -435,7 +461,8 @@ export function useMetrics(): { loading: boolean; metrics: Metrics } {
       }))
         sharedDocs += 1
       if (!open) continue
-      // sharedAlertItems: المتابعة والتخطيط، والمستندات.
+      const currency = str(d['العملة']) || defaultCurrency
+      // sharedAlertItems — المتابعة والتخطيط.
       jsonList(d['متابعة وتخطيط']).forEach((m, i) => {
         const date = parseDay(m['date'])
         if (!date) return
@@ -454,10 +481,11 @@ export function useMetrics(): { loading: boolean; metrics: Metrics } {
             entryType: kind,
             time: str(extra['الوقت']),
             repeat: recurring ? repeat : '',
-            to: `/shared?open=${e.id}`,
+            to,
           }),
         )
       })
+      // المستندات.
       jsonList(d['مستندات']).forEach((m, i) => {
         const date = parseDay(m['date'])
         if (!date) return
@@ -470,23 +498,117 @@ export function useMetrics(): { loading: boolean; metrics: Metrics } {
             type: 'مستند',
             entryType: 'مستند',
             isExpiry: true,
-            to: `/shared?open=${e.id}`,
+            to,
           }),
         )
       })
+      // الجمعية: الدورة الجارية، وتأخر المساهمات (لي، وللمسؤول عن الجميع).
+      if (plan) {
+        const current = plan.current
+        if (current?.dueDate) {
+          cal.push(
+            item({
+              title: `الدورة رقم: ${current.index} — ${name}`,
+              module: 'الالتزامات المشتركة',
+              date: current.dueDate,
+              sourceId: `${e.id}#r${current.index}`,
+              type: 'استحقاق',
+              entryType: 'جمعية مالية',
+              to,
+            }),
+          )
+        }
+        const manager = iAmManager(d, fnd, myNames)
+        for (const cycle of plan.cycles) {
+          if (!cycle.dueDate || !(cycle.dueDate < today)) continue
+          names.forEach((member, idx) => {
+            if (memberPaid(cycle, member)) return
+            const mine = (!!fnd && member.includes(`(${fnd})`)) || myNames.includes(member)
+            if (!mine && !manager) return
+            cal.push(
+              item({
+                title: mine
+                  ? `متأخرة: مساهمتك في الدورة ${cycle.index} — ${name}`
+                  : `متأخرة: ${withoutFnd(member)} — الدورة رقم ${cycle.index} — ${name}`,
+                module: 'الالتزامات المشتركة',
+                date: cycle.dueDate!,
+                sourceId: `${e.id}#r${cycle.index}-${idx}`,
+                type: 'استحقاق',
+                entryType: 'جمعية مالية',
+                to,
+              }),
+            )
+          })
+        }
+      }
+      // اعتماد الصرف: للمسؤول، ما ينتظر اعتماده.
+      if (iAmManager(d, fnd, myNames)) {
+        for (const x of sharedExpenses(d).filter((x) => x.status === 'بانتظار الموافقة')) {
+          cal.push(
+            item({
+              title: `مصروف بانتظار اعتمادك: ${x.description || 'مصروف'} ${plain(x.amount)} ${currency} — ${name}`,
+              module: 'الالتزامات المشتركة',
+              date: parseDay(x.date) ?? today,
+              sourceId: `${e.id}#a${x.id}`,
+              type: 'اعتماد صرف',
+              entryType: 'اعتماد صرف',
+              to,
+            }),
+          )
+        }
+        for (const c of sharedContributions(d).filter((c) => c.status === 'بانتظار الموافقة')) {
+          cal.push(
+            item({
+              title: `ميزانية إضافية بانتظار اعتمادك: ${plain(c.amount)} ${currency} — ${name}`,
+              module: 'الالتزامات المشتركة',
+              date: parseDay(c.date) ?? today,
+              sourceId: `${e.id}#c${c.id}`,
+              type: 'اعتماد صرف',
+              entryType: 'اعتماد صرف',
+              to,
+            }),
+          )
+        }
+      }
+      // تنبيه الميزانية: بلوغ النسبة المختارة أو تجاوزها.
+      if (hasPot(d)) {
+        const b = sharedBudget(d)
+        const left = sharedRemaining(d)
+        const percent = parseInt(str(d['تنبيه عند صرف نسبة']).match(/\d+/)?.[0] ?? '0', 10)
+        const spentPct = (sharedTotal(d) * 100) / b
+        const exceeded = left < -0.01
+        if (exceeded || (percent > 0 && spentPct + 0.001 >= percent)) {
+          const limit = exceeded ? b : (b * percent) / 100
+          const rows = approvedExpenses(d)
+            .map((x) => [parseDay(x.date) ?? today, x.amount] as [Date, number])
+            .sort((a, z) => a[0].getTime() - z[0].getTime())
+          let sum = 0
+          let reached = today
+          for (const [day, amount] of rows) {
+            sum += amount
+            if (exceeded ? sum > limit + 0.01 : sum + 0.01 >= limit) {
+              reached = day
+              break
+            }
+          }
+          cal.push(
+            item({
+              title: exceeded
+                ? `تجاوز الميزانية «${name}»: العجز ${plain(-left)} ${currency}`
+                : `الميزانية «${name}»: صُرف ${Math.round(spentPct)}% من قيمتها`,
+              module: 'الالتزامات المشتركة',
+              date: reached,
+              sourceId: `${e.id}#b`,
+              type: 'تنبيه الميزانية',
+              entryType: 'تنبيه الميزانية',
+              to,
+            }),
+          )
+        }
+      }
       const due = parseDay(e.due_date)
       if (due) {
-        cal.push(
-          item({
-            title: name,
-            module: 'الالتزامات المشتركة',
-            date: due,
-            sourceId: e.id,
-            status: e.status,
-            entryType: e.entry_type,
-            to: `/shared?open=${e.id}`,
-          }),
-        )
+        cal.push(item({ title: name, module: 'الالتزامات المشتركة', date: due, sourceId: e.id, status: e.status, entryType: e.entry_type, to }))
       }
     }
 
@@ -516,7 +638,7 @@ export function useMetrics(): { loading: boolean; metrics: Metrics } {
       assetsDocs,
       calendarItems: cal,
     }
-  }, [personal.data, shared.data, assets.data, contracts.data, payments.data, people.data, reminders.data, records.data, delegations.data, fnd])
+  }, [personal.data, shared.data, assets.data, contracts.data, payments.data, people.data, reminders.data, records.data, delegations.data, fnd, store.data, defaultCurrency])
 
   return { loading, metrics }
 }

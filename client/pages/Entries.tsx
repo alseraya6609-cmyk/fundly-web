@@ -9,6 +9,7 @@ import { date, matches, money } from '@/lib/format'
 import { Chip, Empty, ErrorBox, InfoRow, Loading, PageHeader, SearchField, SectionTitle, Sheet } from '@/components/ui'
 import { EntryCard } from '@/components/EntryCard'
 import { FileButton } from '@/components/FileButton'
+import { SharedDetails } from '@/components/SharedDetails'
 
 type Group = { key: string; label: string; icon: LucideIcon }
 
@@ -174,6 +175,9 @@ const LOGS = [
   'مستندات',
   'مرفقات إضافية',
 ]
+// مفاتيح داخلية يحفظها التطبيق للمزامنة والمشاركة ولا يعرضها.
+const INTERNAL = /^(_|معرف المنشئ|قبول الأعضاء|وقت دعوة الأعضاء|مؤرشف عند|محذوف عند|سجل تاريخي عند|تقسيم الأعضاء|تواريخ الأعضاء|عهدة_)/
+
 // مفاتيح ملفات داخل السجلات: تُعرض زر فتح بدل النص.
 const FILE_KEYS = new Set(['مرفق الفاتورة', 'receipt', 'path', 'المرفق'])
 
@@ -219,10 +223,14 @@ function EntryDetails({
   const extrasQ = useCommitmentExtras(page === 'personal' ? entry.id : undefined)
   const bucket = page === 'personal' ? 'personal-entry-attachments' : 'shared-entry-attachments'
   const fields = Object.entries(entry.details ?? {})
-    .filter(([key, value]) => /[\u0600-\u06FF]/.test(key) && !LOGS.includes(key) && ['string', 'number'].includes(typeof value))
-    .filter(([, value]) => String(value).trim() !== '' && !String(value).trim().startsWith('['))
+    .filter(([key, value]) => /[\u0600-\u06FF]/.test(key) && !LOGS.includes(key) && !INTERNAL.test(key) && ['string', 'number'].includes(typeof value))
+    .filter(([, value]) => String(value).trim() !== '' && !/^[[{]/.test(String(value).trim()))
     .slice(0, 40)
-  const logs = LOGS.map((key) => [key, parseRows(entry.details?.[key])] as const).filter(([, rows]) => rows.length > 0)
+  // دفتر المشتركة (المصروفات والمساهمات والتسويات) يُعرض في SharedDetails.
+  const ledgerKeys = page === 'shared' ? ['سجل المصروفات المشتركة', 'سجل المساهمات', 'سجل التسويات'] : []
+  const logs = LOGS.filter((key) => !ledgerKeys.includes(key))
+    .map((key) => [key, parseRows(entry.details?.[key])] as const)
+    .filter(([, rows]) => rows.length > 0)
   const x = extrasQ.data
 
   return (
@@ -244,6 +252,8 @@ function EntryDetails({
         <InfoRow label="تاريخ الإضافة" value={date(entry.created_at)} />
         <InfoRow label="آخر تحديث" value={date(entry.updated_at)} />
       </div>
+
+      {page === 'shared' && <SharedDetails details={entry.details ?? {}} entryType={entry.entry_type} currency={currency} />}
 
       {logs.map(([key, rows]) => (
         <DetailBlock key={key} title={key} count={rows.length}>
