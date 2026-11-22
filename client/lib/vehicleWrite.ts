@@ -384,3 +384,97 @@ export async function setVehicleTenant(assetId: string, tenant: string) {
   const { error: saveError } = await supabase.from('project_assets').update({ tenant }).eq('id', assetId)
   if (saveError) throw saveError
 }
+
+/* ===== عقد تأجير المركبة القديم (_openLegacyEquipContractForm) ===== */
+
+export const EQUIP_RENT_BASES = ['شهري', 'يومي', 'بالساعات']
+export const equipRatePer = (basis: string) => (basis === 'يومي' ? 'يوم' : basis === 'بالساعات' ? 'ساعة' : 'شهر')
+
+/** _equipContractExtra: الأساس والمبلغ والملاحظة من notes. */
+export function equipContractExtra(notes: string | null): Record<string, string> {
+  const text = (notes ?? '').trim()
+  if (!text.startsWith('{')) return text ? { note: text } : {}
+  try {
+    const decoded = JSON.parse(text)
+    if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) return {}
+    const out: Record<string, string> = {}
+    for (const [k, v] of Object.entries(decoded)) if (k !== '__equip__') out[k] = String(v ?? '')
+    return out
+  } catch {
+    return {}
+  }
+}
+
+/** _equipMonthsBetween */
+export function equipMonthsBetween(start: Date, end: Date | null): number {
+  if (!end || !(end > start)) return 0
+  let months = 0
+  let cursor = start
+  while (cursor < end && months < 120) {
+    months++
+    cursor = new Date(start.getFullYear(), start.getMonth() + months, start.getDate())
+  }
+  return months
+}
+
+const isoDate = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+
+/**
+  حفظ العقد القديم: notes {__equip__, basis, rate, note}، والقيمة = المبلغ × الأشهر
+  في الشهري، والدفعات الشهرية تلقائيًا إن طُلبت، والمستأجر على المركبة.
+*/
+export async function saveLegacyVehicleContract(o: {
+  assetId: string
+  assetTitle: string
+  existing: { id: string; status: string }
+  company: string
+  phone: string
+  start: Date
+  end: Date | null
+  basis: string
+  rateText: string
+  note: string
+  autoPay: boolean
+}) {
+  const rate = parseFloat(o.rateText.replace(/,/g, '').replace(/٬/g, '')) || 0
+  const months = equipMonthsBetween(o.start, o.end)
+  const total = o.basis === 'شهري' && months > 0 ? rate * months : rate
+  const notes = JSON.stringify({ __equip__: 1, basis: o.basis, rate: o.rateText, note: o.note })
+  const { error } = await supabase
+    .from('property_unit_contracts')
+    .update({
+      unit_name: o.assetTitle,
+      tenant_name: o.company,
+      tenant_phone: o.phone,
+      annual_rent: total,
+      payment_cycle: o.basis,
+      start_date: isoDate(o.start),
+      end_date: o.end ? isoDate(o.end) : null,
+      status: o.existing.status || 'active',
+      notes,
+    })
+    .eq('id', o.existing.id)
+  if (error) throw error
+  if (o.autoPay && o.basis === 'شهري' && rate > 0 && o.end) {
+    const user = await uid()
+    const rows = []
+    for (let i = 0; i < months; i++) {
+      let due = new Date(o.start.getFullYear(), o.start.getMonth() + i + 1, o.start.getDate())
+      if (due > o.end) due = o.end
+      rows.push({
+        user_id: user,
+        contract_id: o.existing.id,
+        due_date: isoDate(due),
+        amount_due: rate,
+        amount_paid: 0,
+        status: 'pending',
+        notes: JSON.stringify({ __pay__: 1, 'نوع البند': 'دفعة إيجارية', 'اسم البند': `إيجار الشهر ${i + 1}` }),
+      })
+    }
+    if (rows.length) {
+      const { error: payError } = await supabase.from('property_unit_payments').insert(rows)
+      if (payError) throw payError
+    }
+  }
+  if (o.company) await setVehicleTenant(o.assetId, o.company).catch(() => {})
+}

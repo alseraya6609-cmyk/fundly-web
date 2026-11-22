@@ -1,9 +1,11 @@
 import { useMemo, useState } from 'react'
-import { Archive as ArchiveIcon, ArchiveRestore, Building2, CheckCircle2, FileDown, LayoutGrid, UserRound, Users, UsersRound, type LucideIcon } from 'lucide-react'
+import { Archive as ArchiveIcon, ArchiveRestore, Building2, CheckCircle2, FileDown, LayoutGrid, Trash2, UserRound, Users, UsersRound, type LucideIcon } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useI18n } from '@/lib/i18n'
 import { useSession } from '@/lib/session'
-import { ARCHIVED, assetUnits, hasMine, personArchived, useAssets, usePeopleAll, usePersonalAll, useSharedAll, useStore, type Entry, type Person } from '@/lib/data'
+import { ARCHIVED, assetUnits, hasMine, personArchived, useAssets, usePeopleAll, usePersonalAll, useSharedAll, useStore, type Asset, type Entry, type Person } from '@/lib/data'
+import { archivedUnitToTrash, rawUnitKey, showCompletedShared, unarchiveAsset, unarchiveUnit } from '@/lib/archiveWrite'
+import { AssetError } from '@/lib/assetWrite'
 import { canEdit, unarchiveEntry } from '@/lib/personalWrite'
 import { PeopleError, setPersonArchived } from '@/lib/peopleWrite'
 import { SharedError, setSharedArchived } from '@/lib/sharedWrite'
@@ -17,10 +19,13 @@ import { useReportSettings, type ReportDocument, type SummaryItem } from '@/lib/
 /*
   الأرشيف — نفس مصادر ArchiveCenter في التطبيق (lib/data/archive_center.dart):
   الشخصية المؤرشفة، المشتركة المؤرشفة أو المكتملة، الأفراد المؤرشفون،
-  ووحدات العقارات المؤرشفة. للعرض فقط؛ إلغاء الأرشفة من التطبيق.
+  ووحدات العقارات المؤرشفة، مع الإخراج من الأرشيف لكلٍّ بطريقته، ونقل
+  الوحدة المؤرشفة إلى سلة المهملات.
 */
 
-type Row = { key: string; source: string; title: string; subtitle: string; entry?: Entry; person?: Person; shared?: Entry }
+type Row = { key: string; source: string; title: string; subtitle: string; entry?: Entry; person?: Person; shared?: Entry; completed?: Entry; asset?: Asset; unit?: { asset: Asset; key: string; name: string } }
+
+type AssetAction = { kind: 'asset' | 'unit' | 'unit-trash' | 'completed'; row: Row }
 
 const SOURCES: { key: string; icon: LucideIcon; color: string }[] = [
   { key: 'الالتزامات الشخصية', icon: UserRound, color: '#0A5A50' },
@@ -36,6 +41,7 @@ export default function Archive() {
   const [restoring, setRestoring] = useState<Entry | null>(null)
   const [restoringPerson, setRestoringPerson] = useState<Person | null>(null)
   const [restoringShared, setRestoringShared] = useState<Entry | null>(null)
+  const [assetAction, setAssetAction] = useState<AssetAction | null>(null)
   const [busy, setBusy] = useState(false)
   const [restoreError, setRestoreError] = useState('')
   const [notice, setNotice] = useState('')
@@ -67,7 +73,7 @@ export default function Archive() {
       if (!archived) continue
       // المكتمل وحده يُعاد من التطبيق؛ المؤرشف (عندي أو حالته) يُخرج هنا.
       const restorable = (e.status ?? '').includes(ARCHIVED) || hasMine(e.details, 'مؤرشف عند', fnd)
-      out.push({ key: `s${e.id}`, source: 'الالتزامات المشتركة', title: e.title, subtitle: join(t(e.entry_type), Number(e.amount) > 0 ? e.amount : '', date(e.due_date)), shared: restorable ? e : undefined })
+      out.push({ key: `s${e.id}`, source: 'الالتزامات المشتركة', title: e.title, subtitle: join(t(e.entry_type), Number(e.amount) > 0 ? e.amount : '', date(e.due_date)), shared: restorable ? e : undefined, completed: restorable ? undefined : e })
     }
     ;(people.data ?? []).forEach((p, i) => {
       if (!personArchived(p)) return
@@ -75,11 +81,12 @@ export default function Archive() {
     })
     for (const a of assets.data ?? []) {
       if (a.status === ARCHIVED) {
-        out.push({ key: `a${a.id}`, source: 'العقارات والأنشطة', title: a.title, subtitle: join(t(a.sub_type), a.location_or_type) })
+        out.push({ key: `a${a.id}`, source: 'العقارات والأنشطة', title: a.title, subtitle: join(t(a.sub_type), a.location_or_type), asset: a })
       }
       assetUnits(a).forEach((u, i) => {
         if (u['status'] !== 'مؤرشفة') return
-        out.push({ key: `u${a.id}-${i}`, source: 'العقارات والأنشطة', title: String(u['name'] ?? t('وحدة')), subtitle: `${t('وحدة في')} «${a.title}»` })
+        const name = String(u['name'] ?? '') || t('وحدة')
+        out.push({ key: `u${a.id}-${i}`, source: 'العقارات والأنشطة', title: name, subtitle: `${t('وحدة في')} «${a.title}»`, unit: a.status === 'محذوف' ? undefined : { asset: a, key: rawUnitKey(u), name } })
       })
     }
     return out
@@ -193,6 +200,33 @@ export default function Archive() {
                       <span className="hidden sm:inline">{t('إخراج من الأرشيف')}</span>
                     </button>
                   )}
+                  {(r.asset || r.unit || r.completed) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRestoreError('')
+                        setAssetAction({ kind: r.asset ? 'asset' : r.unit ? 'unit' : 'completed', row: r })
+                      }}
+                      className="flex h-10 shrink-0 items-center gap-1.5 rounded-inner border border-line bg-white px-3 text-[12px] font-extrabold text-brand hover:bg-brand-soft"
+                    >
+                      <ArchiveRestore className="size-4" />
+                      <span className="hidden sm:inline">{t('إخراج من الأرشيف')}</span>
+                    </button>
+                  )}
+                  {r.unit && (
+                    <button
+                      type="button"
+                      aria-label={t('حذف')}
+                      title={t('حذف')}
+                      onClick={() => {
+                        setRestoreError('')
+                        setAssetAction({ kind: 'unit-trash', row: r })
+                      }}
+                      className="grid size-10 shrink-0 place-items-center rounded-inner border border-line bg-white text-danger hover:bg-danger-soft"
+                    >
+                      <Trash2 className="size-4" />
+                    </button>
+                  )}
                   {r.person && (
                     <button
                       type="button"
@@ -223,10 +257,52 @@ export default function Archive() {
               )
             })}
           </div>
-          <p className="mt-5 rounded-inner bg-surface px-4 py-3 text-[12px] text-sub">{t('الإخراج من الأرشيف هنا للالتزامات والأفراد والجهات، والعقارات والمكتمل من التطبيق.')}</p>
+          <p className="mt-5 rounded-inner bg-surface px-4 py-3 text-[12px] text-sub">{t('الإخراج من الأرشيف يعيد العنصر إلى قسمه، والوحدة المحذوفة تنتقل إلى سلة المهملات.')}</p>
         </>
       )}
       <ReportPreview doc={preview} onClose={() => setPreview(null)} />
+      <Confirm
+        open={!!assetAction}
+        title={assetAction?.kind === 'unit-trash' ? 'حذف' : 'إخراج من الأرشيف'}
+        message={
+          assetAction
+            ? `«${assetAction.row.title}» — ${t(
+                assetAction.kind === 'unit-trash'
+                  ? 'ستنتقل الوحدة إلى سلة المهملات، ويمكنك استعادتها منها. هل تريد المتابعة؟'
+                  : assetAction.kind === 'unit'
+                    ? 'ستعود الوحدة شاغرة إلى وحدات عقارها. هل تريد المتابعة؟'
+                    : assetAction.kind === 'asset'
+                      ? 'سيعود إلى العقارات والأنشطة والمركبات بحالة «نشط». هل تريد المتابعة؟'
+                      : 'سيعود إلى قائمة الالتزامات المشتركة وتبقى حالته «مكتملة». هل تريد المتابعة؟',
+              )}`
+            : ''
+        }
+        confirmLabel={assetAction?.kind === 'unit-trash' ? 'حذف' : 'إخراج من الأرشيف'}
+        danger={assetAction?.kind === 'unit-trash'}
+        busy={busy}
+        error={restoreError}
+        onConfirm={async () => {
+          if (!assetAction) return
+          const { kind, row } = assetAction
+          setBusy(true)
+          setRestoreError('')
+          try {
+            if (kind === 'asset') await unarchiveAsset(row.asset!.id)
+            else if (kind === 'unit') await unarchiveUnit(row.unit!.asset.id, row.unit!.key)
+            else if (kind === 'unit-trash') await archivedUnitToTrash(row.unit!.asset.id, row.unit!.key, row.unit!.asset.title)
+            else await showCompletedShared(row.completed!.id)
+            await Promise.all(['assets', 'store', 'shared'].map((k) => qc.invalidateQueries({ queryKey: [k] })))
+            setAssetAction(null)
+            setNotice(kind === 'unit-trash' ? 'نُقلت الوحدة إلى سلة المهملات' : 'تم الإخراج من الأرشيف بنجاح')
+            window.setTimeout(() => setNotice(''), 4000)
+          } catch (e) {
+            setRestoreError(e instanceof AssetError ? e.message : errorText(e) || 'تعذّر الحفظ. حاول مرة أخرى.')
+          } finally {
+            setBusy(false)
+          }
+        }}
+        onCancel={() => setAssetAction(null)}
+      />
       <Confirm
         open={!!restoring}
         title="إخراج من الأرشيف"

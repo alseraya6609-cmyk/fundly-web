@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Bell, CalendarDays, ReceiptText, Check, Copy, Ellipsis, FileBarChart, FileText, Globe, LayoutDashboard, LifeBuoy, LogOut, ShieldCheck, Smartphone, UserRound } from 'lucide-react'
+import { Bell, CalendarDays, ReceiptText, Check, Copy, Ellipsis, FileBarChart, FileText, Globe, LayoutDashboard, LifeBuoy, LogOut, ShieldCheck, Smartphone, Trash2, UserRound } from 'lucide-react'
 import { LANGS, useI18n, type Lang } from '@/lib/i18n'
 import { WEB_VERSION, useSession } from '@/lib/session'
 import { useStore } from '@/lib/data'
@@ -109,6 +109,7 @@ export default function More() {
             ['/reports', 'التقارير', FileBarChart],
             ['/salary', 'سندات القبض والرواتب', ReceiptText],
             ['/delegations', 'التفويضات', ShieldCheck],
+            ['/trash', 'سلة المهملات', Trash2],
           ] as const
         ).map(([to, label, Icon]) => (
           <Link key={to} to={to} className="card flex flex-col items-center gap-2 px-2 py-4 text-center hover:bg-line/70">
@@ -135,7 +136,7 @@ export default function More() {
       <div className="card flex items-start gap-3 p-4">
         <Smartphone className="mt-0.5 size-5 text-brand" />
         <div className="flex-1 text-[13px] leading-relaxed text-sub">
-          {t('الإضافة والتعديل في «أنا» متاحة في الموقع، وبقية الأقسام والطلبات والإشعارات من التطبيق.')}
+          {t('ما تفعله في الموقع يُحفظ في حسابك ويظهر في التطبيق. إنشاء الحساب واستعادة كلمة المرور والإشعارات من التطبيق.')}
           <StoreLinks className="mt-3" />
         </div>
       </div>

@@ -14,6 +14,7 @@ import More from '@/pages/More'
 import Documents from '@/pages/Documents'
 import Calendar from '@/pages/Calendar'
 import Archive from '@/pages/Archive'
+import Trash from '@/pages/Trash'
 import Reports from '@/pages/Reports'
 import Salary from '@/pages/Salary'
 import Delegations from '@/pages/Delegations'
@@ -60,6 +61,7 @@ export default function App() {
                 <Route path="documents" element={<Documents />} />
                 <Route path="calendar" element={<Calendar />} />
                 <Route path="archive" element={<Archive />} />
+                <Route path="trash" element={<Trash />} />
                 <Route path="reports" element={<Reports />} />
                 <Route path="requests" element={<Requests />} />
                 <Route path="salary" element={<Salary />} />

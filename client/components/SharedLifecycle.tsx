@@ -405,7 +405,7 @@ export function SharedBanners({ entry, onChanged }: { entry: Entry; onChanged: (
 }
 
 /** المحذوفة عندي ولا تزال عند بقية الأعضاء (fetchRemovedByMe)، وما حذفه الجميع يُحذف من الخادم. */
-function useRemovedByMe() {
+export function useRemovedByMe() {
   const { user, profile } = useSession()
   const fnd = profile?.fnd_id ?? ''
   return useQuery({

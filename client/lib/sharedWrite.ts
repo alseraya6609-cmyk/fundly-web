@@ -1036,3 +1036,12 @@ export async function deleteSimpleEntry(entry: Entry, key: string, at: number, w
     return { [key]: JSON.stringify(list.map(simpleJson)), [EVENTS_KEY]: withEvent(details, `${tr('حذف')} ${tr(e.kind)}: ${e.title}`) }
   })
 }
+
+/** _purgeShared: حذف نهائي للمحذوف عندي — وحدي فقط (مع أعضاء آخرين يُحذف حين يحذفه الجميع). */
+export async function purgeSharedAlone(entry: Entry, me: string) {
+  if (sharedWithOthers(entry.details ?? {}, me) && !removedByAll(asStrings(entry.details))) throw new SharedError('يُحذف نهائيًا حين يحذفه كل الأعضاء')
+  const { error } = await supabase.from('shared_entries').delete().eq('id', entry.id)
+  if (error) throw error
+}
+
+export { REMOVED_KEY as SHARED_REMOVED_KEY }
