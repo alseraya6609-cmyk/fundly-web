@@ -358,6 +358,186 @@ export const FORMS: Record<string, EntryForm> = {
       }
     ]
   },
+  "دين / قرض / سلفة": {
+    "label": "دين / قرض / سلفة",
+    "subtitle": "تسجيل الدين وحالة السداد",
+    "fields": [
+      {
+        "label": "نوع الدين",
+        "kind": "select",
+        "required": true,
+        "isPrimary": true,
+        "options": [
+          "لي — يدين لي",
+          "له — أدين له"
+        ]
+      },
+      {
+        "label": "اسم الجهة",
+        "kind": "text",
+        "required": true,
+        "isPrimary": true,
+        "isTitle": true,
+        "hint": "مثال: أحمد",
+        "display": "اسم الفرد / الجهة"
+      },
+      {
+        "label": "الرقم التعريفي للطرف الثاني",
+        "kind": "text",
+        "isPrimary": true,
+        "hint": "اختياري — FND-XXXX-XXXX",
+        "display": "الرقم التعريفي للربط بالدين / السلفة"
+      },
+      {
+        "label": "رقم الهاتف",
+        "kind": "text",
+        "isPrimary": true
+      },
+      {
+        "label": "البريد الإلكتروني",
+        "kind": "text",
+        "isPrimary": true
+      },
+      {
+        "label": "العنوان",
+        "kind": "text",
+        "isPrimary": true
+      },
+      {
+        "label": "تفاصيل الدين",
+        "kind": "text",
+        "isPrimary": true
+      },
+      {
+        "label": "المبلغ",
+        "kind": "number",
+        "required": true,
+        "isPrimary": true,
+        "isAmount": true,
+        "half": true
+      },
+      {
+        "label": "العملة",
+        "kind": "select",
+        "isPrimary": true,
+        "half": true,
+        "options": [
+          "جنيه سوداني",
+          "جنيه مصري",
+          "درهم",
+          "دولار",
+          "دينار أردني",
+          "دينار بحريني",
+          "دينار",
+          "روبية باكستانية",
+          "روبية هندية",
+          "ريال",
+          "ريال عماني",
+          "ريال قطري",
+          "ليرة سورية",
+          "ليرة لبنانية",
+          "يوان صيني",
+          "يورو"
+        ]
+      },
+      {
+        "label": "تاريخ الدين",
+        "kind": "date",
+        "required": true,
+        "isPrimary": true
+      },
+      {
+        "label": "تاريخ الاستحقاق",
+        "kind": "date",
+        "required": true,
+        "isPrimary": true,
+        "half": true
+      },
+      {
+        "label": "تذكير",
+        "kind": "select",
+        "isPrimary": true,
+        "half": true,
+        "options": [
+          "بدون تذكير",
+          "قبل يوم",
+          "قبل أسبوع",
+          "قبل أسبوعين",
+          "مخصص"
+        ]
+      },
+      {
+        "label": "ملاحظات",
+        "kind": "multiline"
+      }
+    ]
+  },
+  "قسط": {
+    "label": "قسط",
+    "subtitle": "جدولة الأقساط ومتابعة السداد",
+    "fields": [
+      {
+        "label": "الجهة",
+        "kind": "text",
+        "required": true,
+        "isPrimary": true,
+        "isTitle": true,
+        "display": "الفرد / الجهة"
+      },
+      {
+        "label": "رقم الهاتف",
+        "kind": "text",
+        "isPrimary": true
+      },
+      {
+        "label": "البريد الإلكتروني",
+        "kind": "text",
+        "isPrimary": true
+      },
+      {
+        "label": "المبلغ الإجمالي",
+        "kind": "number",
+        "required": true,
+        "isPrimary": true,
+        "isAmount": true,
+        "half": true
+      },
+      {
+        "label": "العملة",
+        "kind": "select",
+        "isPrimary": true,
+        "half": true,
+        "options": [
+          "جنيه سوداني",
+          "جنيه مصري",
+          "درهم",
+          "دولار",
+          "دينار أردني",
+          "دينار بحريني",
+          "دينار",
+          "روبية باكستانية",
+          "روبية هندية",
+          "ريال",
+          "ريال عماني",
+          "ريال قطري",
+          "ليرة سورية",
+          "ليرة لبنانية",
+          "يوان صيني",
+          "يورو"
+        ]
+      },
+      {
+        "label": "عدد الأقساط",
+        "kind": "number",
+        "required": true,
+        "isPrimary": true
+      },
+      {
+        "label": "ملاحظات",
+        "kind": "multiline"
+      }
+    ]
+  },
   "غرامة": {
     "label": "غرامة",
     "subtitle": "غرامة أو مخالفة مالية",
@@ -406,6 +586,86 @@ export const FORMS: Record<string, EntryForm> = {
       {
         "label": "رقم المخالفة",
         "kind": "text"
+      }
+    ]
+  },
+  "عهدة مالية": {
+    "label": "عهدة مالية",
+    "subtitle": "تسجيل مبلغ تحت مسؤولية شخص ومتابعة تسويته",
+    "fields": [
+      {
+        "label": "اسم العهدة",
+        "kind": "text",
+        "required": true,
+        "isPrimary": true,
+        "isTitle": true
+      },
+      {
+        "label": "قيمة العهدة",
+        "kind": "number",
+        "required": true,
+        "isPrimary": true,
+        "isAmount": true,
+        "half": true
+      },
+      {
+        "label": "تنبيه عند صرف نسبة",
+        "kind": "select",
+        "isPrimary": true,
+        "half": true,
+        "options": [
+          "بلا تنبيه",
+          "50%",
+          "75%",
+          "90%",
+          "100%"
+        ]
+      },
+      {
+        "label": "اسم المستلم",
+        "kind": "text",
+        "required": true,
+        "isPrimary": true
+      },
+      {
+        "label": "الرقم التعريفي للمستلم",
+        "kind": "text",
+        "isPrimary": true,
+        "hidden": true
+      },
+      {
+        "label": "اعتماد المصروفات",
+        "kind": "text",
+        "isPrimary": true,
+        "hidden": true
+      },
+      {
+        "label": "تاريخ التسليم",
+        "kind": "date",
+        "isPrimary": true
+      },
+      {
+        "label": "الغرض من العهدة",
+        "kind": "text"
+      },
+      {
+        "label": "حالة العهدة",
+        "kind": "select",
+        "options": [
+          "مستلمة",
+          "قيد الاستخدام",
+          "تمت التسوية",
+          "معادة",
+          "متأخرة"
+        ]
+      },
+      {
+        "label": "رقم المرجع أو المستند",
+        "kind": "text"
+      },
+      {
+        "label": "ملاحظات",
+        "kind": "multiline"
       }
     ]
   },

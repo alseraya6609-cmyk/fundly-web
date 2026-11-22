@@ -14,8 +14,13 @@ import { EXPENSE_SUBCATEGORIES, FINE_SUBCATEGORIES, FORMS, INCOME_SUBCATEGORIES,
     حُفظ من التطبيق في الوقت نفسه.
   - الحذف نقل إلى سلة المحذوفات (TrashStore.markDeleted) لا محو.
 
-  غير متاح في الموقع (من التطبيق فقط): الدين/القرض والعهدة (الإسناد إلى حساب
-  آخر)، القسط (جدول الأقساط)، الأدوية، وأي نوع قديم.
+  الدين والعهدة: إن كُتب رقم تعريفي للطرف الثاني يُدمج الإسناد «بانتظار
+  القبول» في التفاصيل (_withCustodyAssignment)، والخادم يرسل الطلب إليه.
+  القسط: جدول الأقساط «القسط N» = «التاريخ — المبلغ العملة»، والاستحقاق
+  أقرب قسط قادم.
+
+  غير متاح في الموقع (من التطبيق فقط): الأدوية، وأي نوع قديم، وبدء عهدة
+  جديدة، والصرف من العهدة والتسوية والدفعات.
 */
 
 export { FORMS }
@@ -33,16 +38,140 @@ const REMINDER_LABELS = new Set(['تذكيرات', 'تذكير', 'التذكير
 
 /** قائمة الإضافة كما في التطبيق (_entryCategories) بالأنواع المتاحة في الموقع. */
 export const ADD_MENU: { group: string; title: string; subtitle: string; types: string[] }[] = [
-  { group: 'financial', title: 'مالية', subtitle: 'مصروفات وإيرادات وديون', types: ['المصروفات الشخصية', 'إيراد', 'غرامة'] },
+  { group: 'financial', title: 'مالية', subtitle: 'مصروفات وإيرادات وديون', types: ['المصروفات الشخصية', 'إيراد', 'دين / قرض / سلفة', 'قسط', 'غرامة'] },
   { group: 'document', title: 'مستند', subtitle: 'وثائق وملفات مهمة', types: ['مستند'] },
   { group: 'organization', title: 'المتابعة والتخطيط', subtitle: 'مهام ومواعيد وعادات', types: ['مهمة', 'موعد', 'عادة', 'تذكير', 'ملاحظات'] },
   { group: 'medical_accounts', title: 'أدوية وبيانات وكلمات سر', subtitle: 'الأدوية والحسابات وكلمات المرور', types: ['كلمات سر'] },
   { group: 'lifestyle', title: 'نمط الحياة', subtitle: 'مناسبات واشتراكات وهدايا', types: ['مناسبة', 'اشتراك', 'هدية'] },
   { group: 'location', title: 'مواقع وأماكن', subtitle: 'أماكن ومواقع مهمة', types: ['مواقع وأماكن'] },
+  { group: 'custody', title: 'عهدة مالية', subtitle: 'مبالغ تحت مسؤولية شخص', types: ['عهدة مالية'] },
 ]
 
 /** أنواع تُضاف من التطبيق فقط (تحتاج ما لا يوفره الموقع). */
-export const APP_ONLY_TYPES = ['دين / قرض / سلفة', 'قسط', 'عهدة مالية', 'أدوية']
+export const APP_ONLY_TYPES = ['أدوية']
+
+// ---------------- الإسناد بالرقم التعريفي (الدين والعهدة) ----------------
+
+export const DEBT_ID_LABEL = 'الرقم التعريفي للطرف الثاني'
+export const CUSTODY_ID_LABEL = 'الرقم التعريفي للمستلم'
+export const CUSTODY_APPROVAL_LABEL = 'اعتماد المصروفات'
+export const CUSTODY_APPROVAL_REQUIRED = 'بموافقة صاحب العهدة'
+export const CUSTODY_APPROVAL_NONE = 'بدون موافقة'
+const SHARED_TYPES = new Set(['عهدة مالية', 'دين / قرض / سلفة'])
+const ASSIGNMENT_KEYS = ['عهدة_مالك_المعرّف', 'عهدة_مالك_الاسم', 'عهدة_مسندة_إلى', 'عهدة_المسند_إليه_الاسم', 'عهدة_حالة_الإسناد', 'عهدة_تاريخ_الإسناد', 'عهدة_ملاحظة_الإسناد', 'عهدة_تاريخ_الرد']
+
+/** AppIdentity.normalize / isValid */
+export const normalizeFnd = (value: string) => value.trim().toUpperCase().replace(/ /g, '')
+export const isValidFnd = (value: string) => /^FND-[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(value.trim())
+
+/** من أنا عند الإسناد: رقمي والاسم الظاهر للآخرين. */
+export type Me = { fnd: string; name: string }
+
+const idLabelOf = (type: string) => (type === 'عهدة مالية' ? CUSTODY_ID_LABEL : DEBT_ID_LABEL)
+
+/** اسم صاحب الرقم كما هو مسجَّل عنده (FundlyAccount.nameForFnd). */
+export async function nameForFnd(fnd: string): Promise<string> {
+  try {
+    const { data } = await supabase.rpc('fundly_name_by_fnd', { p_fnd: fnd })
+    const name = String(data ?? '').trim()
+    return name === 'null' ? '' : name
+  } catch {
+    return ''
+  }
+}
+
+/** _withCustodyAssignment: إسناد «بانتظار القبول» لمن كُتب رقمه. */
+function withAssignment(type: string, details: Record<string, string>, holderName: string, me: Me): Record<string, string> {
+  if (!SHARED_TYPES.has(type)) return details
+  const idLabel = idLabelOf(type)
+  const holderId = normalizeFnd(details[idLabel] ?? '')
+  if (!isValidFnd(holderId) || holderId === me.fnd) return details
+  const n = new Date()
+  const stamp = `${n.getDate()}/${n.getMonth() + 1}/${n.getFullYear()} ${pad2(n.getHours())}:${pad2(n.getMinutes())}`
+  const out: Record<string, string> = { ...details, [idLabel]: holderId }
+  const put = (key: string, value: string) => {
+    if (value.trim()) out[key] = value.trim()
+    else delete out[key]
+  }
+  put('عهدة_مالك_المعرّف', me.fnd)
+  put('عهدة_مالك_الاسم', me.name)
+  put('عهدة_مسندة_إلى', holderId)
+  put('عهدة_المسند_إليه_الاسم', holderName)
+  put('عهدة_حالة_الإسناد', 'بانتظار القبول')
+  put('عهدة_تاريخ_الإسناد', stamp)
+  delete out['عهدة_ملاحظة_الإسناد']
+  return out
+}
+
+const holderNameOf = (details: Record<string, string>) => (details['اسم المستلم'] ?? '').trim() || (details['اسم الجهة'] ?? '').trim()
+
+// ---------------- جدول الأقساط ----------------
+
+export type Installment = { date: string; amount: string }
+
+/** fmtAmount: بلا كسور إن كان صحيحًا، وإلا خانتان. */
+const fmtAmount = (v: number) => (v === Math.round(v) ? v.toFixed(0) : v.toFixed(2))
+
+/** الأقساط المحفوظة «القسط N» = «التاريخ — المبلغ العملة». */
+export function savedInstallments(entry: Entry | undefined, count: number): Installment[] {
+  const rows: Installment[] = []
+  for (let i = 1; i <= count; i++) {
+    const saved = String(entry?.details?.[`القسط ${i}`] ?? '')
+    const parts = saved.split(' — ')
+    rows.push({ date: parts[0].trim(), amount: parts.length > 1 ? (parts[1].match(/[\d.]+/)?.[0] ?? '') : '' })
+  }
+  return rows
+}
+
+export const installmentCount = (raw: string) => Math.min(120, Math.max(0, parseInt(latin((raw ?? '').trim()), 10) || 0))
+
+/** بالتساوي: الإجمالي ÷ العدد، والفرق على آخر قسط (autoSplit). */
+export function splitEqually(totalRaw: string, rows: Installment[]): Installment[] {
+  const total = parseFloat(latin((totalRaw ?? '').trim())) || 0
+  if (total <= 0 || !rows.length) return rows
+  const count = rows.length
+  const each = Math.floor((total / count) * 100) / 100
+  return rows.map((r, i) => ({ ...r, amount: fmtAmount(i === count - 1 ? total - each * (count - 1) : each) }))
+}
+
+/** _addMonthsClamped: 31 يناير ← 28 فبراير. */
+export function addMonthsClamped(d: Date, months: number): Date {
+  const total = d.getMonth() + months
+  const year = d.getFullYear() + Math.floor(total / 12)
+  const month = ((total % 12) + 12) % 12
+  const last = new Date(year, month + 1, 0).getDate()
+  return new Date(year, month, Math.min(d.getDate(), last))
+}
+
+export function parseDmy(value: string): Date | null {
+  const p = value.trim().split('/')
+  if (p.length !== 3) return null
+  const [d, m, y] = p.map((x) => parseInt(x, 10))
+  if ([d, m, y].some(Number.isNaN)) return null
+  return new Date(y, m - 1, d)
+}
+
+/** التفاصيل الإضافية للقسط والاستحقاق = أقرب قسط قادم. */
+function installmentExtra(rows: Installment[], equalSplit: boolean, unit: string): { extra: Record<string, string>; due?: string } {
+  const extra: Record<string, string> = {}
+  const dates: Date[] = []
+  rows.forEach((r, i) => {
+    extra[`القسط ${i + 1}`] = `${r.date.trim()} — ${r.amount.trim()} ${unit}`
+    const parsed = parseDmy(r.date)
+    if (parsed) dates.push(parsed)
+  })
+  extra['تقسيم القسط بالتساوي'] = equalSplit ? 'نعم' : 'لا'
+  if (!dates.length) return { extra }
+  dates.sort((a, b) => a.getTime() - b.getTime())
+  extra['تاريخ القسط الأول'] = dmy(dates[0])
+  extra['تاريخ آخر قسط'] = dmy(dates[dates.length - 1])
+  const n = new Date()
+  const today = new Date(n.getFullYear(), n.getMonth(), n.getDate())
+  return { extra, due: dmy(dates.find((d) => d >= today) ?? dates[dates.length - 1]) }
+}
+
+/** ما يلزم الحفظ غير حقول النموذج. */
+export type SaveExtras = { me: Me; installments?: Installment[]; equalSplit?: boolean }
 
 /** هل يُعدَّل هذا السجل من الموقع؟ (نوع متاح، وصاحبه أنا) */
 export function canEdit(entry: Entry, userId: string | undefined): boolean {
@@ -169,7 +298,20 @@ export function initialValues(form: EntryForm, entry?: Entry, defaultCurrency = 
 
 /** أخطاء الإدخال: الحقول الإلزامية الظاهرة، والقيمة المخصصة، والمبلغ.
     «يرجى إدخال|الحقل» يُترجم جزءين عند العرض. */
-export function validate(form: EntryForm, values: Values, custom: Values): string | null {
+export function validate(form: EntryForm, values: Values, custom: Values, extras?: { me?: string; installments?: Installment[] }): string | null {
+  // العهدة: المستلم برقمه التعريفي إلزامًا، واسمه.
+  if (form.label === 'عهدة مالية') {
+    const id = normalizeFnd(values[CUSTODY_ID_LABEL] ?? '')
+    if (!id) return 'يرجى إدخال الرقم التعريفي للمستلم'
+    if (!isValidFnd(id)) return 'الصيغة الصحيحة FND-XXXX-XXXX'
+    if (extras?.me && id === extras.me) return 'لا يمكن إسناد العهدة إلى نفسك'
+    if (!(values['اسم المستلم'] ?? '').trim()) return 'يرجى إدخال اسم المستلم'
+  }
+  if (form.label === 'دين / قرض / سلفة') {
+    const id = normalizeFnd(values[DEBT_ID_LABEL] ?? '')
+    if (id && !isValidFnd(id)) return 'الصيغة الصحيحة FND-XXXX-XXXX'
+    if (id && extras?.me && id === extras.me) return 'لا يمكن إسناد العهدة إلى نفسك'
+  }
   for (const field of form.fields) {
     const value = (values[field.label] ?? '').trim()
     if (field.label === 'التصنيف الرئيسي') {
@@ -184,6 +326,12 @@ export function validate(form: EntryForm, values: Values, custom: Values): strin
     if (field.kind === 'select' && [ADD_OTHER, CUSTOM, LEAD_HOURS, LEAD_DAYS].includes(value) && !(custom[field.label] ?? '').trim())
       return `يرجى إدخال|${field.label}`
     if (field.isAmount && value && !/\d/.test(latin(value))) return `يرجى إدخال|${field.label}`
+  }
+  if (form.label === 'قسط' && extras?.installments) {
+    for (const r of extras.installments) {
+      if (!r.date.trim()) return 'اختر تاريخ القسط'
+      if (!/^\d+(\.\d+)?$/.test(latin(r.amount.trim()))) return 'أدخل المبلغ'
+    }
   }
   return null
 }
@@ -258,10 +406,21 @@ async function uploadAttachment(userId: string, file: File): Promise<string> {
   return path
 }
 
-export async function createEntry(form: EntryForm, values: Values, custom: Values, defaultCurrency: string, attachment?: File | null) {
+/** العملة الظاهرة في النموذج (AppSettings.currencyOf). */
+const unitOf = (values: Values, defaultCurrency: string) => (values['العملة'] ?? '').trim() || defaultCurrency
+
+function extrasFor(form: EntryForm, values: Values, defaultCurrency: string, extras?: SaveExtras): { extra: Record<string, string>; due?: string } {
+  if (form.label === 'قسط' && extras?.installments?.length) return installmentExtra(extras.installments, extras.equalSplit !== false, unitOf(values, defaultCurrency))
+  return { extra: {} }
+}
+
+export async function createEntry(form: EntryForm, values: Values, custom: Values, defaultCurrency: string, attachment?: File | null, extras?: SaveExtras) {
   const userId = await currentUserId()
-  const details = detailsFrom(form, values, custom, defaultCurrency)
+  const { extra, due } = extrasFor(form, values, defaultCurrency, extras)
+  let details = { ...detailsFrom(form, values, custom, defaultCurrency), ...extra }
   const core = coreFrom(form, details)
+  if (due) core.dueDate = due
+  if (extras?.me) details = withAssignment(form.label, details, holderNameOf(details), extras.me)
   const attachmentUrl = attachment ? await uploadAttachment(userId, attachment) : null
   const { error } = await supabase.from(TABLE).insert({
     user_id: userId,
@@ -416,15 +575,25 @@ async function updateMerged(base: Entry, mine: Row) {
   if (saveError) throw saveError
 }
 
-export async function updateEntry(entry: Entry, form: EntryForm, values: Values, custom: Values, defaultCurrency: string, attachment?: File | null) {
+export async function updateEntry(entry: Entry, form: EntryForm, values: Values, custom: Values, defaultCurrency: string, attachment?: File | null, extras?: SaveExtras) {
   const userId = await currentUserId()
-  const details = detailsFrom(form, values, custom, defaultCurrency)
+  const { extra, due } = extrasFor(form, values, defaultCurrency, extras)
+  const details = { ...detailsFrom(form, values, custom, defaultCurrency), ...extra }
   const core = coreFrom(form, details)
+  if (due) core.dueDate = due
   const old = asStrings(entry.details)
   const labels = new Set(form.fields.map((f) => f.label))
-  const merged: Record<string, string> = {}
+  let merged: Record<string, string> = {}
   for (const [k, v] of Object.entries(old)) if (!labels.has(k) && !k.startsWith('القسط ')) merged[k] = v
   Object.assign(merged, details)
+  // تغيّر الرقم التعريفي: إسناد جديد بانتظار قبول الشخص الجديد.
+  if (SHARED_TYPES.has(form.label) && extras?.me) {
+    const idLabel = idLabelOf(form.label)
+    if (normalizeFnd(old[idLabel] ?? '') !== normalizeFnd(merged[idLabel] ?? '')) {
+      for (const key of ASSIGNMENT_KEYS) delete merged[key]
+      merged = withAssignment(form.label, merged, holderNameOf(merged), extras.me)
+    }
+  }
   const changed = form.fields
     .filter((f) => !f.hidden && f.kind !== 'header' && (old[f.label] ?? '').trim() !== (merged[f.label] ?? '').trim())
     .map((f) => f.display || f.label)

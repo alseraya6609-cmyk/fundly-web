@@ -123,7 +123,7 @@ def resolve(x):
     if isinstance(x,tuple) and x[0]=='CALL':
         _,fn,args,named=x
         if fn=='_FinancialField':
-            f={'label':args[0]}
+            f={'label':resolve(args[0])}
             kind=named.get('kind')
             f['kind']= kind[1].split('.')[-1] if kind else 'text'
             for key in ['required','isPrimary','isTitle','isAmount','allowCustom','half','hidden']:
@@ -140,7 +140,7 @@ def resolve(x):
 forms_all = resolve(top_const('_financialEntryForms'))
 subs = {k: resolve(top_const(k)) for k in ['_expenseSubcategoriesByMainCategory','_incomeSubcategoriesByMainCategory','_fineSubcategoriesByMainCategory']}
 # الأنواع المتاحة للإضافة والتعديل في الموقع (personalWrite.ts).
-SUPPORTED=['المصروفات الشخصية','إيراد','تحويل مالي','غرامة','مستند','مهمة','موعد','عادة','تذكير','ملاحظات','كلمات سر','مناسبة','اشتراك','هدية','مواقع وأماكن']
+SUPPORTED=['المصروفات الشخصية','إيراد','تحويل مالي','دين / قرض / سلفة','قسط','غرامة','عهدة مالية','مستند','مهمة','موعد','عادة','تذكير','ملاحظات','كلمات سر','مناسبة','اشتراك','هدية','مواقع وأماكن']
 forms={k:forms_all[k] for k in SUPPORTED}
 for k,f in forms.items():
     for fld in f['fields']:

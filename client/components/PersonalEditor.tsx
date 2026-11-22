@@ -1,29 +1,44 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { ChevronLeft, ChevronRight, Paperclip, Plus, X } from 'lucide-react'
+import { BadgeCheck, CalendarDays, ChevronLeft, ChevronRight, Paperclip, Plus, X } from 'lucide-react'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/format'
 import { errorText } from '@/lib/supabase'
 import { useSession } from '@/lib/session'
-import { useCurrency, type Entry } from '@/lib/data'
+import { useCurrency, useStore, type Entry } from '@/lib/data'
+import { publicName } from '@/lib/requestsWrite'
 import { PERSONAL_GROUPS } from '@/lib/catalog'
 import {
   ADD_MENU,
   ADD_OTHER,
   APP_ONLY_TYPES,
+  CUSTODY_APPROVAL_LABEL,
+  CUSTODY_APPROVAL_NONE,
+  CUSTODY_APPROVAL_REQUIRED,
+  CUSTODY_ID_LABEL,
   CUSTOM,
+  DEBT_ID_LABEL,
   FORMS,
   LEAD_DAYS,
   LEAD_HOURS,
+  addMonthsClamped,
   createEntry,
   initialValues,
+  installmentCount,
+  isValidFnd,
   isVisible,
+  nameForFnd,
+  normalizeFnd,
   optionsOf,
+  parseDmy,
+  savedInstallments,
+  splitEqually,
   subcategoriesFor,
   updateEntry,
   validate,
   type EntryForm,
   type FormField,
+  type Installment,
   type Values,
 } from '@/lib/personalWrite'
 import { Sheet } from './ui'
@@ -248,10 +263,186 @@ function FieldInput({
   )
 }
 
+/** «سيظهر اسمك للآخرين…» (fndNameHint). */
+function FndHint({ name }: { name: string }) {
+  const { t } = useI18n()
+  return (
+    <span className="text-[11px] leading-relaxed text-muted">
+      {t('سيظهر اسمك للآخرين حسب إعدادات ملفك الشخصي')}: «{name}»
+    </span>
+  )
+}
+
+/** يجلب اسم صاحب الرقم التعريفي إن كان صحيحًا (fundly_name_by_fnd). */
+function useFndName(raw: string, me: string, onName: (name: string) => void) {
+  const [found, setFound] = useState('')
+  const latest = useRef(onName)
+  latest.current = onName
+  // عند فتح التعديل لا يُستبدل الاسم المحفوظ؛ يُجلب عند تغيير الرقم فقط.
+  const initial = useRef(raw)
+  useEffect(() => {
+    const id = normalizeFnd(raw)
+    setFound('')
+    if (!isValidFnd(id) || id === me) return
+    let alive = true
+    nameForFnd(id).then((name) => {
+      if (!alive || !name) return
+      setFound(name)
+      if (raw !== initial.current) latest.current(name)
+    })
+    return () => {
+      alive = false
+    }
+  }, [raw, me])
+  return found
+}
+
+/** الدين: الرقم التعريفي للطرف الثاني (اختياري) يجلب اسمه إلى «اسم الجهة». */
+function DebtIdField({ field, values, set, me }: { field: FormField; values: Values; set: (l: string, v: string) => void; me: { fnd: string; name: string } }) {
+  const { t } = useI18n()
+  const value = values[field.label] ?? ''
+  useFndName(value, me.fnd, (name) => {
+    if ((values['اسم الجهة'] ?? '').trim() !== name) set('اسم الجهة', name)
+  })
+  return (
+    <Label field={field}>
+      <input dir="ltr" value={value} placeholder={field.hint ? t(field.hint) : undefined} onChange={(e) => set(field.label, e.target.value)} className={inputClass} />
+      <FndHint name={me.name} />
+    </Label>
+  )
+}
+
+/** العهدة: المستلم برقمه التعريفي واسمه، واعتماد المصروفات (التطبيق: اسم المستلم). */
+function CustodyRecipient({ values, set, me }: { values: Values; set: (l: string, v: string) => void; me: { fnd: string; name: string } }) {
+  const { t } = useI18n()
+  const id = values[CUSTODY_ID_LABEL] ?? ''
+  const found = useFndName(id, me.fnd, (name) => set('اسم المستلم', name))
+  const approval = (values[CUSTODY_APPROVAL_LABEL] ?? '') === CUSTODY_APPROVAL_REQUIRED
+  return (
+    <div className="col-span-2 flex flex-col gap-2">
+      <label className="flex flex-col gap-1">
+        <span className="text-[12px] font-bold text-sub">
+          {t('المستلم (الرقم التعريفي)')}
+          <span className="text-danger"> *</span>
+        </span>
+        <input dir="ltr" value={id} placeholder="FND-XXXX-XXXX" onChange={(e) => set(CUSTODY_ID_LABEL, e.target.value)} className={inputClass} />
+        <FndHint name={me.name} />
+      </label>
+      {found ? (
+        <p className="flex items-center gap-1.5 text-[12.5px] font-extrabold text-brand-mid">
+          <BadgeCheck className="size-4" />
+          {t('المستلم')}: {found}
+        </p>
+      ) : (
+        isValidFnd(normalizeFnd(id)) && (
+          <label className="flex flex-col gap-1">
+            <span className="text-[12px] font-bold text-sub">
+              {t('اسم المستلم')}
+              <span className="text-danger"> *</span>
+            </span>
+            <input dir="auto" value={values['اسم المستلم'] ?? ''} placeholder={t('رقم جديد — اكتب اسمه مرة واحدة')} onChange={(e) => set('اسم المستلم', e.target.value)} className={inputClass} />
+          </label>
+        )
+      )}
+      <p className="text-[11px] leading-relaxed text-muted">
+        {t('يُربط المستلم بالعهدة المالية برقمه التعريفي ويصله طلب قبول. يظهر اسمه فقط — لا يُشارك رقم هاتفه ولا عنوانه إلا بموافقته.')}
+      </p>
+      <div className={cn('flex items-center gap-3 rounded-inner border px-3 py-2', approval ? 'border-brand-mid bg-brand-soft' : 'border-hairline bg-white')}>
+        <div className="flex-1">
+          <p className="text-[12.5px] font-extrabold text-title">{t('يحتاج المصروف موافقة صاحب العهدة لاعتماده')}</p>
+          <p className="text-[11px] leading-relaxed text-sub">
+            {t(approval ? 'كل مصروف يرسله المستلم يصلك لتعتمده أو ترفضه، ولا يُخصم من العهدة قبل اعتماده.' : 'مصروفات المستلم تُخصم من العهدة مباشرة بلا موافقة.')}
+          </p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={approval}
+          onClick={() => set(CUSTODY_APPROVAL_LABEL, approval ? CUSTODY_APPROVAL_NONE : CUSTODY_APPROVAL_REQUIRED)}
+          className={cn('relative h-7 w-12 shrink-0 rounded-full transition-colors', approval ? 'bg-brand-mid' : 'bg-hairline')}
+        >
+          <span className={cn('absolute top-1 size-5 rounded-full bg-white shadow transition-all', approval ? 'start-6' : 'start-1')} />
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/** القسط: التقسيم بالتساوي ثم خانة لكل قسط بتاريخه ومبلغه. */
+function InstallmentsTable({
+  rows,
+  equalSplit,
+  unit,
+  onToggle,
+  onChange,
+}: {
+  rows: Installment[]
+  equalSplit: boolean
+  unit: string
+  onToggle: (on: boolean) => void
+  onChange: (rows: Installment[], manualAmount: boolean) => void
+}) {
+  const { t } = useI18n()
+  if (!rows.length) return null
+  function setDate(i: number, value: string) {
+    const next = rows.map((r) => ({ ...r }))
+    next[i].date = value
+    const picked = parseDmy(value)
+    // الخانات الفارغة بعده تُملأ شهريًا ويمكن تغيير أي منها.
+    if (picked) for (let j = i + 1; j < next.length; j++) if (!next[j].date.trim()) next[j].date = dmyOf(addMonthsClamped(picked, j - i))
+    onChange(next, false)
+  }
+  return (
+    <div className="col-span-2 flex flex-col gap-2">
+      <div className="flex h-12 items-center justify-between gap-3 rounded-field bg-field px-3">
+        <span className="text-[13px] font-extrabold text-ink">{t('تقسيم القسط بالتساوي')}</span>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={equalSplit}
+          onClick={() => onToggle(!equalSplit)}
+          className={cn('relative h-7 w-12 rounded-full transition-colors', equalSplit ? 'bg-brand-mid' : 'bg-hairline')}
+        >
+          <span className={cn('absolute top-1 size-5 rounded-full bg-white shadow transition-all', equalSplit ? 'start-6' : 'start-1')} />
+        </button>
+      </div>
+      {rows.map((r, i) => (
+        <div key={i} className="flex items-center gap-2">
+          <span className="flex h-12 w-16 shrink-0 items-center justify-center gap-1 rounded-inner bg-brand-soft text-[11.5px] font-extrabold text-brand">
+            <CalendarDays className="size-3.5" />
+            {t('القسط')} {i + 1}
+          </span>
+          <input type="date" aria-label={`${t('تاريخ القسط')} ${i + 1}`} value={toInputDate(r.date)} onChange={(e) => setDate(i, fromInputDate(e.target.value))} className={inputClass} />
+          <div className="relative w-full">
+            <input
+              dir="ltr"
+              inputMode="decimal"
+              aria-label={`${t('المبلغ')} ${i + 1}`}
+              value={r.amount}
+              onChange={(e) => {
+                const next = rows.map((x) => ({ ...x }))
+                next[i].amount = e.target.value
+                onChange(next, true)
+              }}
+              className={cn(inputClass, 'pr-14')}
+            />
+            <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-[11px] font-bold text-muted">{t(unit)}</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+const dmyOf = (d: Date) => `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}`
+
 function FormBody({ form, entry, onDone }: { form: EntryForm; entry?: Entry; onDone: (message: string) => void }) {
   const { t } = useI18n()
   const currency = useCurrency()
   const qc = useQueryClient()
+  const { profile } = useSession()
+  const store = useStore()
+  const me = { fnd: profile?.fnd_id ?? '', name: publicName(store.data, profile?.display_name ?? '') }
   const start = useMemo(() => initialValues(form, entry, currency), [form, entry, currency])
   const [values, setValues] = useState<Values>(start.values)
   const [custom, setCustomState] = useState<Values>(start.custom)
@@ -264,8 +455,17 @@ function FormBody({ form, entry, onDone }: { form: EntryForm; entry?: Entry; onD
   const set = (label: string, value: string) => setValues((v) => ({ ...v, [label]: value }))
   const setCustom = (label: string, value: string) => setCustomState((v) => ({ ...v, [label]: value }))
 
+  // القسط: الخانات بعدد الأقساط (حتى 120)، والمبالغ بالتساوي ما لم يُعدَّل أحدها.
+  const isInstallment = form.label === 'قسط'
+  const [instStore, setInstStore] = useState<Installment[]>(() => savedInstallments(entry, 120))
+  const [equalSplit, setEqualSplit] = useState(String(entry?.details?.['تقسيم القسط بالتساوي'] ?? '') !== 'لا')
+  const count = isInstallment ? installmentCount(values['عدد الأقساط'] ?? '') : 0
+  const visibleRows = instStore.slice(0, count)
+  const installments = equalSplit ? splitEqually(values['المبلغ الإجمالي'] ?? '', visibleRows) : visibleRows
+  const extras = { me, installments: isInstallment ? installments : undefined, equalSplit }
+
   function ask() {
-    const problem = validate(form, values, custom)
+    const problem = validate(form, values, custom, { me: me.fnd, installments: extras.installments })
     setError(problem ?? '')
     if (!problem) {
       setSaveError('')
@@ -277,8 +477,8 @@ function FormBody({ form, entry, onDone }: { form: EntryForm; entry?: Entry; onD
     setBusy(true)
     setSaveError('')
     try {
-      if (entry) await updateEntry(entry, form, values, custom, currency, file)
-      else await createEntry(form, values, custom, currency, file)
+      if (entry) await updateEntry(entry, form, values, custom, currency, file, extras)
+      else await createEntry(form, values, custom, currency, file, extras)
       await qc.invalidateQueries({ queryKey: ['personal'] })
       setConfirming(false)
       onDone(entry ? 'تم حفظ التعديل بنجاح' : 'تم الحفظ بنجاح')
@@ -298,9 +498,33 @@ function FormBody({ form, entry, onDone }: { form: EntryForm; entry?: Entry; onD
       </p>
       <p className="mt-0.5 text-[12px] text-muted">{t(form.subtitle)}</p>
       <div className="mt-4 grid grid-cols-2 gap-3">
-        {fields.map((field) => (
-          <FieldInput key={field.label} form={form} field={field} values={values} custom={custom} set={set} setCustom={setCustom} />
-        ))}
+        {fields.map((field) =>
+          form.label === 'عهدة مالية' && field.label === 'اسم المستلم' ? (
+            <CustodyRecipient key={field.label} values={values} set={set} me={me} />
+          ) : field.label === DEBT_ID_LABEL ? (
+            <DebtIdField key={field.label} field={field} values={values} set={set} me={me} />
+          ) : (
+            <span key={field.label} className="contents">
+              <FieldInput form={form} field={field} values={values} custom={custom} set={set} setCustom={setCustom} />
+              {isInstallment && field.label === 'عدد الأقساط' && (
+                <InstallmentsTable
+                  rows={installments}
+                  equalSplit={equalSplit}
+                  unit={(values['العملة'] ?? '').trim() || currency}
+                  onToggle={(on) => {
+                    // إيقاف التقسيم يُبقي المبالغ الظاهرة لتعديلها.
+                    if (!on) setInstStore((all) => [...installments, ...all.slice(installments.length)])
+                    setEqualSplit(on)
+                  }}
+                  onChange={(rows, manual) => {
+                    setInstStore((all) => [...rows, ...all.slice(rows.length)])
+                    if (manual) setEqualSplit(false)
+                  }}
+                />
+              )}
+            </span>
+          ),
+        )}
         <label className="col-span-2 flex h-12 cursor-pointer items-center justify-center gap-2 rounded-field border border-brand text-[13px] font-extrabold text-brand hover:bg-brand-soft">
           <Paperclip className="size-4" />
           <span className="truncate">{file ? file.name : t(entry?.attachment_url ? 'استبدال المرفق' : 'إرفاق مستند')}</span>
