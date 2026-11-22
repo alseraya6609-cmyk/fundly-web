@@ -10,6 +10,8 @@ import { date, matches, money } from '@/lib/format'
 import { Chevron, Chip, Empty, ErrorBox, IconBadge, InfoRow, Loading, PageHeader, SearchField, SectionTitle, Sheet } from '@/components/ui'
 import { EntryCard } from '@/components/EntryCard'
 import { PersonEditor } from '@/components/PersonEditor'
+import { PersonalEditor } from '@/components/PersonalEditor'
+import { linkedAdds, recordLinkedTo, type LinkedAdd } from '@/lib/personalWrite'
 import { Confirm } from '@/components/Confirm'
 import { PeopleError, deletePerson, isFrozen, setPersonArchived } from '@/lib/peopleWrite'
 import { errorText } from '@/lib/supabase'
@@ -37,6 +39,9 @@ export default function People() {
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState('')
   const [notice, setNotice] = useState('')
+  // «+» في تفاصيل الفرد: بند في «أنا» مربوط به (الفرد المرتبط).
+  const [addMenu, setAddMenu] = useState(false)
+  const [linkedAdd, setLinkedAdd] = useState<LinkedAdd | null>(null)
   const flash = (message: string) => {
     setNotice(message)
     window.setTimeout(() => setNotice(''), 4000)
@@ -218,8 +223,46 @@ export default function People() {
               <InfoRow label="ملاحظة" value={open.statusNote} />
               <InfoRow label="آخر تحديث" value={date(open.lastUpdate)} />
             </div>
+            {(() => {
+              const linked = (personal.data ?? []).filter((e) => recordLinkedTo(e, open))
+              return (
+                <div className="mt-5">
+                  <div className="mb-2 flex items-center justify-between">
+                    <p className="text-[14px] font-extrabold text-title">
+                      {t('البنود المرتبطة')} {linked.length > 0 && <span className="text-muted">({linked.length})</span>}
+                    </p>
+                    {!isFrozen(open) && (
+                      <button type="button" onClick={() => setAddMenu(true)} className="flex h-9 items-center gap-1 rounded-inner bg-brand px-3 text-[12.5px] font-extrabold text-white hover:bg-brand-dark">
+                        <Plus className="size-4" />
+                        {t('إضافة')}
+                      </button>
+                    )}
+                  </div>
+                  {linked.length === 0 ? (
+                    <p className="rounded-inner bg-surface px-3 py-2 text-[12px] text-muted">{t('لا توجد بنود مرتبطة بعد.')}</p>
+                  ) : (
+                    <div className="flex flex-col gap-2">
+                      {linked.map((e) => (
+                        <Link key={e.id} to={`/me?open=${e.id}`} className="card-inner flex items-center justify-between gap-2 px-3 py-2 text-[12.5px] hover:bg-line/60">
+                          <span className="min-w-0">
+                            <span className="block truncate font-extrabold text-ink" dir="auto">
+                              {e.title}
+                            </span>
+                            <span className="text-[11px] text-muted">
+                              {t(e.entry_type)}
+                              {e.due_date ? ` · ${date(e.due_date)}` : ''}
+                            </span>
+                          </span>
+                          {num(e.amount) > 0 && <span className="shrink-0 font-bold text-brand">{money(e.amount, t(currency))}</span>}
+                        </Link>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
             <p className="mt-5 rounded-inner bg-surface px-4 py-3 text-[12px] text-sub">
-              {t('الوثائق والمستحقات والتفويض من التطبيق.')}
+              {t('الوثائق وسندات الرواتب والتفويض من التطبيق.')}
             </p>
             <Confirm
               open={!!action}
@@ -239,6 +282,52 @@ export default function People() {
           </div>
         )}
       </Sheet>
+      <Sheet open={addMenu && !!open} onClose={() => setAddMenu(false)}>
+        {open && (
+          <div>
+            <p className="text-[18px] font-extrabold text-title">
+              {t('إضافة')} — {open.fullName}
+            </p>
+            <div className="mt-4 flex flex-col gap-4">
+              {linkedAdds(open).map((g) => (
+                <div key={g.group}>
+                  <p className="text-[13px] font-extrabold text-title">{t(g.group)}</p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {g.items.map((x) => (
+                      <button
+                        key={x.label}
+                        type="button"
+                        onClick={() => {
+                          setAddMenu(false)
+                          setLinkedAdd(x)
+                        }}
+                        className="flex h-10 items-center gap-1.5 rounded-inner border border-line bg-white px-3 text-[13px] font-bold text-ink hover:border-brand hover:text-brand"
+                      >
+                        <Plus className="size-4" />
+                        {x.label.split(' — ').map((part) => t(part)).join(' — ')}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <p className="mt-5 rounded-inner bg-surface px-4 py-3 text-[12px] text-sub">
+              {t('العهدة المالية تُسجَّل من «الالتزامات الشخصية» ← «عهدة مالية»، وعند إسنادها لهذا الشخص برقمه التعريفي تظهر هنا تلقائيًا.')}
+            </p>
+          </div>
+        )}
+      </Sheet>
+      <PersonalEditor
+        open={!!linkedAdd}
+        startType={linkedAdd?.type}
+        prefill={linkedAdd?.prefill}
+        link={linkedAdd?.link}
+        onClose={() => setLinkedAdd(null)}
+        onSaved={(message) => {
+          setLinkedAdd(null)
+          flash(message)
+        }}
+      />
       <PersonEditor
         open={adding || !!editing}
         person={editing ?? undefined}

@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Archive, CheckCircle2, ClipboardList, HandCoins, LayoutGrid, Pencil, Plus, Receipt, Trash2, TrendingUp, UserRound, UsersRound, type LucideIcon } from 'lucide-react'
+import { Archive, Ban, CheckCircle2, ClipboardList, HandCoins, LayoutGrid, Pencil, Plus, Receipt, Trash2, TrendingUp, UserRound, UsersRound, type LucideIcon } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useI18n } from '@/lib/i18n'
 import { moduleHidden, useSession } from '@/lib/session'
@@ -16,6 +16,10 @@ import { Confirm } from '@/components/Confirm'
 import { archiveEntry, canEdit, paymentActions, remainingOf, trashEntry } from '@/lib/personalWrite'
 import { publicName } from '@/lib/requestsWrite'
 import { IncreaseForm, PaymentForm } from '@/components/PaymentForm'
+import { CustodyPanel, SettleDialog } from '@/components/CustodyPanel'
+import { FollowupPanel } from '@/components/FollowupPanel'
+import { cancelDebt, custodyRemaining, isOwnerView, needsSettlement, settleBeforeDelete, settleCustody, type SettleMode } from '@/lib/custodyWrite'
+import { EntryError, MEDICATION_ACTIONS, logMedication } from '@/lib/personalWrite'
 import { LEDGER_TYPES, SharedError, setSharedArchived } from '@/lib/sharedWrite'
 import { ExpenseForm } from '@/components/ExpenseForm'
 import { errorText } from '@/lib/supabase'
@@ -315,6 +319,32 @@ function EntryDetails({
   const money$ = page === 'personal' ? paymentActions(entry, me.fnd) : { pay: false, increase: false }
   const ownCurrency = currencyOf(entry.details, currency)
   const [moneyForm, setMoneyForm] = useState<'pay' | 'increase' | null>(null)
+  // العهدة والدين: «إلغاء» بتسوية، والحذف بعد التسوية (_handleMenuAction).
+  const isCustody = page === 'personal' && entry.entry_type === 'عهدة مالية'
+  const isDebt = page === 'personal' && entry.entry_type === 'دين / قرض / سلفة'
+  const canCancel = editable && entry.status !== 'ملغاة' && ((isCustody && isOwnerView(entry.details ?? {}, me.fnd)) || isDebt)
+  // العهدة غير الملغاة: «إلغاء» مكان «حذف».
+  const canDelete = editable && !(isCustody && entry.status !== 'ملغاة' && isOwnerView(entry.details ?? {}, me.fnd))
+  const [closing, setClosing] = useState<'custody-cancel' | 'debt-cancel' | 'settle-delete' | null>(null)
+  // الأدوية: تسجيل التناول والتأجيل والتخطي.
+  const isMedicine = page === 'personal' && ['أدوية', 'أدوية وبياناتها'].includes(entry.entry_type) && !['مؤرشف', 'محذوف'].includes(entry.status)
+  const [dose, setDose] = useState<string | null>(null)
+  const [debtReason, setDebtReason] = useState('')
+  const [closeError, setCloseError] = useState('')
+  async function runClose(fn: () => Promise<void>, message: string) {
+    setBusy(true)
+    setCloseError('')
+    try {
+      await fn()
+      await qc.invalidateQueries({ queryKey: ['personal'] })
+      setClosing(null)
+      onChanged?.(message)
+    } catch (e) {
+      setCloseError(e instanceof EntryError ? e.message : errorText(e) || 'تعذّر الحفظ. حاول مرة أخرى.')
+    } finally {
+      setBusy(false)
+    }
+  }
   const [action, setAction] = useState<'archive' | 'delete' | 'shared-archive' | null>(null)
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState('')
@@ -373,12 +403,129 @@ function EntryDetails({
             <Archive className="size-4" />
             {t('أرشفة')}
           </button>
-          <button type="button" onClick={() => setAction('delete')} className="flex h-11 items-center justify-center gap-1.5 rounded-inner bg-danger-soft text-[13px] font-extrabold text-danger hover:bg-danger/15">
-            <Trash2 className="size-4" />
-            {t('حذف')}
-          </button>
+          {canCancel && (
+            <button
+              type="button"
+              onClick={() => {
+                setCloseError('')
+                setDebtReason('')
+                setClosing(isCustody ? 'custody-cancel' : 'debt-cancel')
+              }}
+              className="flex h-11 items-center justify-center gap-1.5 rounded-inner bg-danger-soft text-[13px] font-extrabold text-danger hover:bg-danger/15"
+            >
+              <Ban className="size-4" />
+              {t('إلغاء')}
+            </button>
+          )}
+          {canDelete && (
+            <button
+              type="button"
+              onClick={() => {
+                setCloseError('')
+                if (needsSettlement(entry)) setClosing('settle-delete')
+                else setAction('delete')
+              }}
+              className="flex h-11 items-center justify-center gap-1.5 rounded-inner bg-danger-soft text-[13px] font-extrabold text-danger hover:bg-danger/15"
+            >
+              <Trash2 className="size-4" />
+              {t('حذف')}
+            </button>
+          )}
         </div>
       )}
+      {isMedicine && (
+        <div className="mt-2 grid grid-cols-3 gap-2">
+          {MEDICATION_ACTIONS.map((a) => (
+            <button
+              key={a}
+              type="button"
+              onClick={() => {
+                setCloseError('')
+                setDose(a)
+              }}
+              className={`flex h-11 items-center justify-center rounded-inner text-[13px] font-extrabold ${a === 'تسجيل التناول' ? 'bg-brand-mid text-white hover:bg-brand' : 'border border-hairline bg-white text-body hover:bg-surface'}`}
+            >
+              {t(a)}
+            </button>
+          ))}
+        </div>
+      )}
+      <Confirm
+        open={!!dose}
+        title={dose ?? ''}
+        message={`«${entry.title}» — ${t(dose ?? '')}`}
+        busy={busy}
+        error={closeError}
+        onConfirm={() => dose && runClose(() => logMedication(entry, dose), `${t('تم الحفظ')}: ${t(dose)}`)}
+        onCancel={() => setDose(null)}
+      />
+      {closing === 'custody-cancel' && (
+        <SettleDialog
+          title="تسوية العهدة قبل الإلغاء"
+          intro={t('لا تُلغى العهدة بدون تسوية. اكتب سبب التسوية ثم اختر إلغاء العهدة أو تسويتها وأرشفتها.')}
+          noteLabel="سبب التسوية *"
+          options={[
+            { mode: 'cancel', label: 'إلغاء العهدة', danger: true },
+            { mode: 'archive', label: 'تسوية وأرشفة' },
+          ]}
+          busy={busy}
+          error={closeError}
+          onPick={(mode, note) =>
+            runClose(
+              () => settleCustody(entry, note, mode as SettleMode, true, me.fnd),
+              mode === 'archive' ? 'تمت تسوية العهدة ونُقلت إلى الأرشيف' : 'أُلغيت العهدة بعد التسوية — يمكنك حذفها',
+            )
+          }
+          onCancel={() => setClosing(null)}
+        />
+      )}
+      {closing === 'settle-delete' && (
+        <SettleDialog
+          title="يحتاج تسوية قبل الحذف"
+          intro={`${t('لا يُحذف')} «${entry.title}» ${t('قبل التسوية — المتبقي')}: ${money(isCustody ? custodyRemaining(entry) : remainingOf(entry), t(ownCurrency))}`}
+          noteLabel="ماذا تم في التسوية؟ (وملاحظاتك) *"
+          options={[{ mode: 'ok', label: 'تمت التسوية' }]}
+          busy={busy}
+          error={closeError}
+          onPick={(_, note) =>
+            runClose(async () => {
+              await settleBeforeDelete(entry, note)
+              await trashEntry(entry)
+            }, 'نُقل الالتزام إلى سلة المحذوفات')
+          }
+          onCancel={() => setClosing(null)}
+        />
+      )}
+      {closing === 'debt-cancel' &&
+        (needsSettlement(entry) ? (
+          <SettleDialog
+            title="يحتاج تسوية قبل الإلغاء"
+            intro={`${t('لا يُلغى')} «${entry.title}» ${t('قبل التسوية — المتبقي')}: ${money(remainingOf(entry), t(ownCurrency))}`}
+            noteLabel="ماذا تم في التسوية؟ (وملاحظاتك) *"
+            options={[{ mode: 'ok', label: 'تمت التسوية' }]}
+            busy={busy}
+            error={closeError}
+            onPick={(_, note) =>
+              runClose(async () => {
+                await settleBeforeDelete(entry, note)
+                await cancelDebt(entry, '')
+              }, 'أُلغي الدين')
+            }
+            onCancel={() => setClosing(null)}
+          />
+        ) : (
+          <Confirm
+            open
+            title="إلغاء الدين"
+            message={t('سيُلغى الدين ويبقى للاطلاع.')}
+            confirmLabel="إلغاء الدين"
+            danger
+            busy={busy}
+            error={closeError}
+            onConfirm={() => runClose(() => cancelDebt(entry, debtReason), 'أُلغي الدين')}
+            onCancel={() => setClosing(null)}
+          />
+        ))}
       {(money$.pay || money$.increase) && (
         <div className="mt-2 grid grid-cols-2 gap-2">
           {money$.pay && (
@@ -485,6 +632,9 @@ function EntryDetails({
         <InfoRow label="تاريخ الإضافة" value={date(entry.created_at)} />
         <InfoRow label="آخر تحديث" value={date(entry.updated_at)} />
       </div>
+
+      {isCustody && <CustodyPanel entry={entry} currency={ownCurrency} me={me} onChanged={(m) => onChanged?.(m)} />}
+      {page === 'personal' && <FollowupPanel entry={entry} canWrite={editable && !['مؤرشف', 'محذوف'].includes(entry.status)} onChanged={(m) => onChanged?.(m)} />}
 
       {page === 'shared' && <SharedDetails details={entry.details ?? {}} entryType={entry.entry_type} currency={currency} entry={entry} onChanged={onChanged} />}
 

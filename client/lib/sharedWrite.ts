@@ -594,3 +594,35 @@ export async function roscaTogglePayout(
     return { [CYCLES_KEY]: JSON.stringify(data), [EVENTS_KEY]: withEvent(details, text) }
   })
 }
+
+/**
+  _roscaChangeReceiver (للمسؤول): الجديد يأخذ هذه الدورة، وصاحبها السابق يأخذ
+  دورة الجديد. لا تغيير لدورة سُلّم مبلغها ولا لمن استلم مبلغه.
+*/
+export async function roscaChangeReceiver(entry: Entry, index: number, picked: string, opts: { me: string; myNames: string[]; tr: (s: string) => string }) {
+  const { tr } = opts
+  await mutateRosca(entry, (details) => {
+    if (!iAmManager(details, opts.me, opts.myNames)) throw new SharedError('هذا الإجراء للمسؤول وحده')
+    const { plan, cycle, names } = cycleOf(details, index)
+    if (!names.includes(picked)) throw new SharedError('لم يعد هذا العضو في الجمعية')
+    if (cycle.payoutDate.trim()) throw new SharedError('سُلِّم مبلغ هذه الدورة — لا يمكن تغيير الدور')
+    const old = cycle.receiver
+    if (picked === old) throw new SharedError('تغيّرت حالة الدورة — افتحها من جديد')
+    const other = plan.cycles.find((c) => c.index !== index && c.receiver === picked)
+    if (other && other.payoutDate.trim()) throw new SharedError(`${withoutFnd(picked)} ${tr('استلم مبلغه — لا يمكن تغيير دوره')}`)
+    const data = cyclesOf(details)
+    const here = cycleAt(data, index)
+    here.receiver = picked
+    data[String(index)] = here
+    const swap = other && old
+    if (swap) {
+      const there = cycleAt(data, other.index)
+      there.receiver = old
+      data[String(other.index)] = there
+    }
+    const text = swap
+      ? `${tr('تغيير الدور')}: ${withoutFnd(picked)} ${tr('صاحب الدورة')} ${index}، ${withoutFnd(old)} ${tr('صاحب الدورة')} ${other.index}`
+      : `${tr('تغيير الدور')}: ${withoutFnd(picked)} ${tr('صاحب الدورة')} ${index}`
+    return { [CYCLES_KEY]: JSON.stringify(data), [EVENTS_KEY]: withEvent(details, text) }
+  })
+}

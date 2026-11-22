@@ -140,7 +140,7 @@ def resolve(x):
 forms_all = resolve(top_const('_financialEntryForms'))
 subs = {k: resolve(top_const(k)) for k in ['_expenseSubcategoriesByMainCategory','_incomeSubcategoriesByMainCategory','_fineSubcategoriesByMainCategory']}
 # الأنواع المتاحة للإضافة والتعديل في الموقع (personalWrite.ts).
-SUPPORTED=['المصروفات الشخصية','إيراد','تحويل مالي','دين / قرض / سلفة','قسط','غرامة','عهدة مالية','مستند','مهمة','موعد','عادة','تذكير','ملاحظات','كلمات سر','مناسبة','اشتراك','هدية','مواقع وأماكن']
+SUPPORTED=['المصروفات الشخصية','إيراد','تحويل مالي','دين / قرض / سلفة','قسط','غرامة','عهدة مالية','أدوية','مستند','مهمة','موعد','عادة','تذكير','ملاحظات','كلمات سر','مناسبة','اشتراك','هدية','مواقع وأماكن']
 forms={k:forms_all[k] for k in SUPPORTED}
 for k,f in forms.items():
     for fld in f['fields']:

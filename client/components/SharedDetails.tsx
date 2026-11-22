@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Check, CheckCheck, Gift, Handshake, Paperclip, PlusCircle, Trash2, Undo2, X } from 'lucide-react'
+import { Check, CheckCheck, Gift, Handshake, Paperclip, PlusCircle, Repeat, Trash2, Undo2, X } from 'lucide-react'
 import { useStore, type Entry } from '@/lib/data'
 import { errorText } from '@/lib/supabase'
 import { publicName as publicNameOf } from '@/lib/requestsWrite'
@@ -13,6 +13,7 @@ import {
   isLumpSum,
   payoutUnpaid,
   recordSettlements,
+  roscaChangeReceiver,
   roscaCycleTotal,
   roscaMarkAllPaid,
   roscaTogglePayout,
@@ -548,6 +549,7 @@ type RoscaTask =
   | { kind: 'markAll'; index: number; count: number }
   | { kind: 'delete'; index: number; id: string; label: string }
   | { kind: 'cancelPayout'; index: number }
+  | { kind: 'receiver'; index: number; picked: string; other: number | null; old: string }
 
 function CircleView({
   details,
@@ -567,6 +569,7 @@ function CircleView({
   const [form, setForm] = useState<{ index: number; member?: string; pickCycle: boolean } | null>(null)
   const [task, setTask] = useState<RoscaTask | null>(null)
   const [payout, setPayout] = useState<number | null>(null)
+  const [receiverFor, setReceiverFor] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const plan = roscaPlan(details, names)
@@ -580,9 +583,10 @@ function CircleView({
     try {
       if (task.kind === 'markAll') await roscaMarkAllPaid(rosca.entry, task.index)
       else if (task.kind === 'delete') await deleteRoscaPayment(rosca.entry, task.index, task.id, rosca.fnd, rosca.myNames)
+      else if (task.kind === 'receiver') await roscaChangeReceiver(rosca.entry, task.index, task.picked, { me: rosca.fnd, myNames: rosca.myNames, tr: t })
       else await roscaTogglePayout(rosca.entry, task.index, { cancel: true, recordUnpaid: false, me: rosca.fnd, myNames: rosca.myNames, currency: rosca.currency, tr: t })
       await qc.invalidateQueries({ queryKey: ['shared'] })
-      rosca.onChanged(task.kind === 'markAll' ? 'تم تسجيل سداد الجميع بنجاح' : task.kind === 'delete' ? 'تم حذف المساهمة بنجاح' : 'تم تحديث تسليم الدورة بنجاح')
+      rosca.onChanged(task.kind === 'markAll' ? 'تم تسجيل سداد الجميع بنجاح' : task.kind === 'delete' ? 'تم حذف المساهمة بنجاح' : task.kind === 'receiver' ? 'تم تغيير الدور بنجاح' : 'تم تحديث تسليم الدورة بنجاح')
       setTask(null)
     } catch (e) {
       setError(e instanceof SharedError ? e.message : errorText(e) || 'تعذّر الحفظ. حاول مرة أخرى.')
@@ -709,10 +713,16 @@ function CircleView({
                         {t('إلغاء التسليم')}
                       </button>
                     ) : (
-                      <button type="button" onClick={() => setPayout(c.index)} className={`${wideButton} mt-1 bg-brand-mid text-white hover:bg-brand`}>
-                        <Gift className="size-4" />
-                        {t('تسليم المبلغ لصاحب الدور')}
-                      </button>
+                      <>
+                        <button type="button" onClick={() => setPayout(c.index)} className={`${wideButton} mt-1 bg-brand-mid text-white hover:bg-brand`}>
+                          <Gift className="size-4" />
+                          {t('تسليم المبلغ لصاحب الدور')}
+                        </button>
+                        <button type="button" onClick={() => setReceiverFor(c.index)} className={`${wideButton} border border-hairline bg-white text-title hover:bg-surface`}>
+                          <Repeat className="size-4" />
+                          {t('تغيير الدور')}
+                        </button>
+                      </>
                     ))}
                 </div>
               )}
@@ -751,18 +761,53 @@ function CircleView({
           }}
         />
       )}
+      <Sheet open={receiverFor !== null} onClose={() => setReceiverFor(null)}>
+        {receiverFor !== null && (
+          <div>
+            <p className="text-[17px] font-extrabold text-title">{t('تغيير الدور: اختر صاحب الدور الجديد')}</p>
+            <div className="mt-3 flex flex-col gap-2">
+              {names.map((n) => {
+                const turn = plan.cycles.find((c) => c.receiver === n)
+                const current = plan.cycles.find((c) => c.index === receiverFor)
+                return (
+                  <button
+                    key={n}
+                    type="button"
+                    disabled={current?.receiver === n}
+                    onClick={() => {
+                      setError('')
+                      setReceiverFor(null)
+                      setTask({ kind: 'receiver', index: receiverFor, picked: n, other: turn && turn.index !== receiverFor ? turn.index : null, old: current?.receiver ?? '' })
+                    }}
+                    className="card-inner flex items-center justify-between px-3 py-2.5 text-start text-[13px] font-bold text-ink hover:bg-line/60 disabled:opacity-50"
+                  >
+                    <span>{shown(n)}</span>
+                    <span className="text-[11px] text-muted">
+                      {t('الدورة رقم')}: {turn?.index ?? '—'}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
+      </Sheet>
       <Confirm
         open={!!task}
-        title={task?.kind === 'markAll' ? 'تسجيل سداد الجميع' : task?.kind === 'delete' ? 'حذف المساهمة' : 'إلغاء التسليم'}
+        title={task?.kind === 'markAll' ? 'تسجيل سداد الجميع' : task?.kind === 'delete' ? 'حذف المساهمة' : task?.kind === 'receiver' ? 'تغيير الدور' : 'إلغاء التسليم'}
         message={
           task?.kind === 'markAll'
             ? `${t('سيُسجَّل')} ${task.count} ${t('عضوًا كمن سدّدوا حصتهم في الدورة')} ${task.index}.`
             : task?.kind === 'delete'
               ? `${t('سيُحذف سداد')} ${task.label} ${t('من الدورة')} ${task.index}.`
-              : `${t('سيُلغى تسجيل تسليم مبلغ الدورة')} ${task?.index ?? ''}.`
+              : task?.kind === 'receiver'
+                ? task.other !== null && task.old
+                  ? `${shown(task.picked)} ← ${t('صاحب الدورة')} ${task.index}، ${shown(task.old)} ← ${t('صاحب الدورة')} ${task.other}`
+                  : `${shown(task.picked)} ← ${t('صاحب الدورة')} ${task.index}`
+                : `${t('سيُلغى تسجيل تسليم مبلغ الدورة')} ${task?.index ?? ''}.`
         }
-        confirmLabel={task?.kind === 'markAll' ? 'تسجيل' : task?.kind === 'delete' ? 'حذف' : 'إلغاء التسليم'}
-        danger={task?.kind !== 'markAll'}
+        confirmLabel={task?.kind === 'markAll' ? 'تسجيل' : task?.kind === 'delete' ? 'حذف' : task?.kind === 'receiver' ? 'تأكيد' : 'إلغاء التسليم'}
+        danger={task?.kind === 'delete' || task?.kind === 'cancelPayout'}
         busy={busy}
         error={error}
         onConfirm={runTask}

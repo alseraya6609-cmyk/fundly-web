@@ -669,6 +669,203 @@ export const FORMS: Record<string, EntryForm> = {
       }
     ]
   },
+  "أدوية": {
+    "label": "أدوية",
+    "subtitle": "بيانات الدواء والجرعات والتذكيرات",
+    "fields": [
+      {
+        "label": "لمن هذا الدواء",
+        "kind": "select",
+        "required": true,
+        "isPrimary": true,
+        "allowCustom": true,
+        "options": [
+          "أدوية لي",
+          "أدوية لشخص آخر"
+        ]
+      },
+      {
+        "label": "اسم الدواء",
+        "kind": "text",
+        "required": true,
+        "isPrimary": true,
+        "isTitle": true
+      },
+      {
+        "label": "من تاريخ",
+        "kind": "date",
+        "required": true,
+        "isPrimary": true,
+        "half": true
+      },
+      {
+        "label": "إلى تاريخ",
+        "kind": "date",
+        "isPrimary": true,
+        "half": true
+      },
+      {
+        "label": "نمط الجرعات",
+        "kind": "select",
+        "required": true,
+        "isPrimary": true,
+        "options": [
+          "مرة واحدة",
+          "يومياً",
+          "كل عدد من الساعات",
+          "أيام أسبوع محددة",
+          "كل عدد من الأيام",
+          "تواريخ مخصصة"
+        ]
+      },
+      {
+        "label": "كل كم ساعة",
+        "kind": "select",
+        "isPrimary": true,
+        "allowCustom": true,
+        "options": [
+          "كل 4 ساعات",
+          "كل 6 ساعات",
+          "كل 8 ساعات",
+          "كل 12 ساعة"
+        ]
+      },
+      {
+        "label": "أيام الأسبوع",
+        "kind": "select",
+        "isPrimary": true,
+        "allowCustom": true,
+        "options": [
+          "السبت",
+          "الأحد",
+          "الاثنين",
+          "الثلاثاء",
+          "الأربعاء",
+          "الخميس",
+          "الجمعة"
+        ]
+      },
+      {
+        "label": "كل كم يوم",
+        "kind": "number",
+        "isPrimary": true,
+        "hint": "مثال: 3"
+      },
+      {
+        "label": "تواريخ مخصصة",
+        "kind": "text",
+        "isPrimary": true,
+        "hint": "مثال: 5/1 و 12/1 و 19/1"
+      },
+      {
+        "label": "وقت الجرعة",
+        "kind": "time",
+        "isPrimary": true,
+        "half": true
+      },
+      {
+        "label": "وقت إضافي",
+        "kind": "time",
+        "isPrimary": true,
+        "half": true
+      },
+      {
+        "label": "تفعيل التذكيرات",
+        "kind": "toggle",
+        "isPrimary": true
+      },
+      {
+        "label": "التذكير قبل الموعد",
+        "kind": "select",
+        "isPrimary": true,
+        "allowCustom": true,
+        "options": [
+          "قبل 5 دقائق",
+          "قبل ربع ساعة",
+          "قبل نصف ساعة",
+          "قبل ساعة"
+        ]
+      },
+      {
+        "label": "شكل الدواء",
+        "kind": "select",
+        "isPrimary": true,
+        "allowCustom": true,
+        "options": [
+          "قرص",
+          "كبسولة",
+          "شراب",
+          "حقن",
+          "قطرات",
+          "بخاخ",
+          "كريم",
+          "أخرى"
+        ]
+      },
+      {
+        "label": "الجرعة",
+        "kind": "text",
+        "isPrimary": true,
+        "half": true
+      },
+      {
+        "label": "وحدة الجرعة",
+        "kind": "select",
+        "isPrimary": true,
+        "allowCustom": true,
+        "half": true,
+        "options": [
+          "قرص",
+          "كبسولة",
+          "قطرات",
+          "ml",
+          "mg",
+          "puffs",
+          "units",
+          "أخرى"
+        ]
+      },
+      {
+        "label": "تعليمات الطعام",
+        "kind": "select",
+        "isPrimary": true,
+        "options": [
+          "قبل الطعام",
+          "مع الطعام",
+          "بعد الطعام",
+          "دون تفصيل"
+        ]
+      },
+      {
+        "label": "الاسم العلمي",
+        "kind": "text"
+      },
+      {
+        "label": "التركيز",
+        "kind": "text"
+      },
+      {
+        "label": "تفاصيل الرعاية",
+        "kind": "header"
+      },
+      {
+        "label": "اسم الطبيب",
+        "kind": "text"
+      },
+      {
+        "label": "اسم الصيدلية",
+        "kind": "text"
+      },
+      {
+        "label": "رقم الوصفة",
+        "kind": "text"
+      },
+      {
+        "label": "ملاحظات",
+        "kind": "multiline"
+      }
+    ]
+  },
   "مستند": {
     "label": "مستند",
     "subtitle": "وثيقة أو عقد أو ملف مهم",

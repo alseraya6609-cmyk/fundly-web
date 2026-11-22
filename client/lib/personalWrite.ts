@@ -19,8 +19,11 @@ import { EXPENSE_SUBCATEGORIES, FINE_SUBCATEGORIES, FORMS, INCOME_SUBCATEGORIES,
   القسط: جدول الأقساط «القسط N» = «التاريخ — المبلغ العملة»، والاستحقاق
   أقرب قسط قادم.
 
-  غير متاح في الموقع (من التطبيق فقط): الأدوية، وأي نوع قديم، وبدء عهدة
-  جديدة، والصرف من العهدة والتسوية والدفعات.
+  الأدوية: نمط الجرعات يكشف حقله وحده، وتسجيل التناول والتأجيل والتخطي
+  سطر في «سجل الجرعات».
+
+  غير متاح في الموقع (من التطبيق فقط): أي نوع قديم، وبدء عهدة جديدة،
+  وبدء كورس دواء جديد ودواء آخر من نفس الوصفة.
 */
 
 export { FORMS }
@@ -41,14 +44,24 @@ export const ADD_MENU: { group: string; title: string; subtitle: string; types: 
   { group: 'financial', title: 'مالية', subtitle: 'مصروفات وإيرادات وديون', types: ['المصروفات الشخصية', 'إيراد', 'دين / قرض / سلفة', 'قسط', 'غرامة'] },
   { group: 'document', title: 'مستند', subtitle: 'وثائق وملفات مهمة', types: ['مستند'] },
   { group: 'organization', title: 'المتابعة والتخطيط', subtitle: 'مهام ومواعيد وعادات', types: ['مهمة', 'موعد', 'عادة', 'تذكير', 'ملاحظات'] },
-  { group: 'medical_accounts', title: 'أدوية وبيانات وكلمات سر', subtitle: 'الأدوية والحسابات وكلمات المرور', types: ['كلمات سر'] },
+  { group: 'medical_accounts', title: 'أدوية وبيانات وكلمات سر', subtitle: 'الأدوية والحسابات وكلمات المرور', types: ['أدوية', 'كلمات سر'] },
   { group: 'lifestyle', title: 'نمط الحياة', subtitle: 'مناسبات واشتراكات وهدايا', types: ['مناسبة', 'اشتراك', 'هدية'] },
   { group: 'location', title: 'مواقع وأماكن', subtitle: 'أماكن ومواقع مهمة', types: ['مواقع وأماكن'] },
   { group: 'custody', title: 'عهدة مالية', subtitle: 'مبالغ تحت مسؤولية شخص', types: ['عهدة مالية'] },
 ]
 
 /** أنواع تُضاف من التطبيق فقط (تحتاج ما لا يوفره الموقع). */
-export const APP_ONLY_TYPES = ['أدوية']
+export const APP_ONLY_TYPES: string[] = []
+
+/** _dateRangeStart و_distinctTimes في التطبيق. */
+const DATE_RANGE_START: Record<string, string> = {
+  'إلى تاريخ': 'من تاريخ',
+  'تاريخ نهاية التفويض': 'تاريخ بداية التفويض',
+  'تاريخ الاستحقاق': 'تاريخ الدين',
+  'تاريخ الانتهاء': 'تاريخ الإصدار',
+  'تاريخ الاستلام': 'تاريخ البداية',
+}
+const DISTINCT_TIMES: Record<string, string> = { 'وقت إضافي': 'وقت الجرعة' }
 
 // ---------------- الإسناد بالرقم التعريفي (الدين والعهدة) ----------------
 
@@ -171,7 +184,7 @@ function installmentExtra(rows: Installment[], equalSplit: boolean, unit: string
 }
 
 /** ما يلزم الحفظ غير حقول النموذج. */
-export type SaveExtras = { me: Me; installments?: Installment[]; equalSplit?: boolean }
+export type SaveExtras = { me: Me; installments?: Installment[]; equalSplit?: boolean; link?: Record<string, string> }
 
 /** هل يُعدَّل هذا السجل من الموقع؟ (نوع متاح، وصاحبه أنا) */
 export function canEdit(entry: Entry, userId: string | undefined): boolean {
@@ -186,6 +199,14 @@ export type Values = Record<string, string>
 export function isVisible(field: FormField, values: Values): boolean {
   if (field.label === 'التصنيف الفرعي') return false
   if (field.hidden) return false
+  // الأدوية: كل نمط جرعات يكشف حقله الخاص فقط.
+  if ('نمط الجرعات' in values) {
+    const pattern = (values['نمط الجرعات'] ?? '').trim()
+    if (field.label === 'كل كم ساعة') return pattern === 'كل عدد من الساعات'
+    if (field.label === 'أيام الأسبوع') return pattern === 'أيام أسبوع محددة'
+    if (field.label === 'كل كم يوم') return pattern === 'كل عدد من الأيام'
+    if (field.label === 'تواريخ مخصصة') return pattern === 'تواريخ مخصصة'
+  }
   if (field.label === 'التذكير قبل الموعد' && 'تفعيل التذكيرات' in values) return values['تفعيل التذكيرات'] === 'نعم'
   if ((field.label === 'التكرار' || field.label === 'وقت التذكير') && 'تفعيل تذكير' in values) return values['تفعيل تذكير'] === 'نعم'
   if ((field.label === 'التكرار' || field.label === 'اليوم') && 'تفعيل عملية متكررة' in values)
@@ -243,7 +264,7 @@ export function parseAmountInt(raw: string): number {
 
 export const dmy = (d: Date) => `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}`
 const pad2 = (n: number) => String(n).padStart(2, '0')
-const clockNow = () => {
+export const clockNow = () => {
   const n = new Date()
   return `${pad2(n.getHours())}:${pad2(n.getMinutes())}`
 }
@@ -326,6 +347,20 @@ export function validate(form: EntryForm, values: Values, custom: Values, extras
     if (field.kind === 'select' && [ADD_OTHER, CUSTOM, LEAD_HOURS, LEAD_DAYS].includes(value) && !(custom[field.label] ?? '').trim())
       return `يرجى إدخال|${field.label}`
     if (field.isAmount && value && !/\d/.test(latin(value))) return `يرجى إدخال|${field.label}`
+    // _dateRangeStart: «إلى تاريخ» لا يسبق «من تاريخ»...
+    const startLabel = DATE_RANGE_START[field.label]
+    if (startLabel && value) {
+      const start = parseDmy(values[startLabel] ?? '')
+      const end = parseDmy(value)
+      if (start && end && end < start) return `«${field.label}» لا يسبق «${startLabel}»`
+    }
+    // _distinctTimes: وقت الدواء الإضافي غير وقت الجرعة.
+    const other = DISTINCT_TIMES[field.label]
+    if (other && value && value === (values[other] ?? '').trim()) return `يجب أن يختلف عن «${other}»`
+    if (field.kind === 'number' && value && !field.isAmount) {
+      const n = latin(value.replace(/[,،٬\s]/g, ''))
+      if (!/^[0-9.٫]+$/.test(n) || !Number.isFinite(parseFloat(n.replace('٫', '.')))) return 'أدخل رقماً صحيحاً'
+    }
   }
   if (form.label === 'قسط' && extras?.installments) {
     for (const r of extras.installments) {
@@ -390,14 +425,14 @@ function coreFrom(form: EntryForm, details: Record<string, string>): Core {
   }
 }
 
-async function currentUserId(): Promise<string> {
+export async function currentUserId(): Promise<string> {
   const { data, error } = await supabase.auth.getUser()
   if (error || !data.user) throw new Error('انتهت الجلسة — ادخل من جديد')
   return data.user.id
 }
 
 /** رفع المرفق: نفس الحاوية ونفس شكل المسار في التطبيق. */
-async function uploadAttachment(userId: string, file: File): Promise<string> {
+export async function uploadAttachment(userId: string, file: File): Promise<string> {
   const dot = file.name.lastIndexOf('.')
   const ext = dot < 0 || dot === file.name.length - 1 ? '' : file.name.slice(dot).replace(/[^a-zA-Z0-9.]/g, '')
   const path = `${userId}/${Date.now() * 1000 + Math.floor(Math.random() * 1000)}${ext}`
@@ -417,7 +452,8 @@ function extrasFor(form: EntryForm, values: Values, defaultCurrency: string, ext
 export async function createEntry(form: EntryForm, values: Values, custom: Values, defaultCurrency: string, attachment?: File | null, extras?: SaveExtras) {
   const userId = await currentUserId()
   const { extra, due } = extrasFor(form, values, defaultCurrency, extras)
-  let details = { ...detailsFrom(form, values, custom, defaultCurrency), ...extra }
+  // ربط البند بفرد عند الإضافة من تفاصيله (linkDetails).
+  let details = { ...detailsFrom(form, values, custom, defaultCurrency), ...extra, ...(extras?.link ?? {}) }
   const core = coreFrom(form, details)
   if (due) core.dueDate = due
   if (extras?.me) details = withAssignment(form.label, details, holderNameOf(details), extras.me)
@@ -736,7 +772,7 @@ export const remainingOf = (entry: Entry) => Math.round(Number(entry.amount) || 
 type Fresh = { id: string; amount: number; details: Record<string, unknown>; attachment_url: string | null; updated_at: string; status: string; entry_type: string }
 
 /** قراءة أحدث نسخة، وتطبيق التغيير، والكتابة بشرط عدم تغيّرها. */
-async function mutateEntry(entry: Entry, change: (row: Fresh, details: Record<string, string>) => Record<string, unknown>) {
+export async function mutateEntry(entry: Entry, change: (row: Fresh, details: Record<string, string>) => Record<string, unknown>) {
   for (let attempt = 0; attempt < 4; attempt++) {
     const { data, error } = await supabase.from(TABLE).select('id, amount, details, attachment_url, updated_at, status, entry_type').eq('id', entry.id).maybeSingle()
     if (error) throw error
@@ -816,4 +852,152 @@ export async function increaseDebt(entry: Entry, amountText: string, note: strin
     return { amount: total, details: { ...row.details, [INCREASES_KEY]: previous ? `${previous}\n${line}` : line } }
   })
   return total
+}
+
+// ---------------- سجل الجرعات (_logMedicationAction) ----------------
+
+export const MEDICATION_ACTIONS = ['تسجيل التناول', 'تأجيل', 'تخطي']
+
+/** «تسجيل التناول» و«تأجيل» و«تخطي»: سطر «الإجراء — yyyy/MM/dd HH:mm». */
+export async function logMedication(entry: Entry, action: string) {
+  if (!MEDICATION_ACTIONS.includes(action)) throw new EntryError('تعذر الحفظ. حاول مرة أخرى.')
+  const n = new Date()
+  const line = `${action} — ${n.getFullYear()}/${pad2(n.getMonth() + 1)}/${pad2(n.getDate())} ${pad2(n.getHours())}:${pad2(n.getMinutes())}`
+  await mutateEntry(entry, (row, details) => {
+    const previous = details['سجل الجرعات'] ?? ''
+    return { details: { ...row.details, 'سجل الجرعات': previous ? `${previous}\n${line}` : line } }
+  })
+}
+
+// ---------------- «+ إضافة» داخل الالتزام (_addFollowupRow، _saveAddedAttachment) ----------------
+
+export const FOLLOWUP_KEY = 'سجل المتابعة'
+export const FOLLOWUP_TYPES = ['مهمة', 'موعد', 'عادة', 'تذكير', 'ملاحظات']
+const EXTRA_FILES_KEY = 'مرفقات إضافية'
+
+export type Followup = { النوع: string; العنوان: string; التفاصيل: string; التاريخ: string; الوقت: string }
+
+export function followupsOf(details: Record<string, unknown>): Record<string, string>[] {
+  try {
+    const raw = details[FOLLOWUP_KEY]
+    const list = typeof raw === 'string' ? JSON.parse(raw || '[]') : (raw ?? [])
+    return Array.isArray(list) ? list.filter((x) => x && typeof x === 'object').map((x) => Object.fromEntries(Object.entries(x).map(([k, v]) => [k, v == null ? '' : String(v)]))) : []
+  } catch {
+    return []
+  }
+}
+
+/** إضافة عنصر آخر قائمة JSON نصًّا، دون إعادة كتابة ما قبله. */
+function appendJson(raw: string, item: Record<string, unknown>): string {
+  const text = raw.trim()
+  if (!text) return JSON.stringify([item])
+  try {
+    if (!Array.isArray(JSON.parse(text))) throw new Error()
+  } catch {
+    throw new EntryError('تعذّرت قراءة السجل — نفّذ ذلك من التطبيق')
+  }
+  const body = text.slice(0, text.lastIndexOf(']')).trim()
+  return `${body}${body === '[' ? '' : ','}${JSON.stringify(item)}]`
+}
+
+export async function addFollowup(entry: Entry, row: Followup) {
+  if (!row.العنوان.trim()) throw new EntryError('اكتب العنوان أولًا')
+  const item = { النوع: row.النوع, العنوان: row.العنوان.trim(), التفاصيل: row.التفاصيل.trim(), التاريخ: row.التاريخ.trim(), الوقت: row.الوقت.trim() }
+  await mutateEntry(entry, (fresh, details) => ({ details: { ...fresh.details, [FOLLOWUP_KEY]: appendJson(details[FOLLOWUP_KEY] ?? '', item) } }))
+}
+
+/** _deleteFollowupRow: يُحذف ما يطابق العنوان والنوع والتاريخ. */
+export async function deleteFollowup(entry: Entry, row: Record<string, string>) {
+  await mutateEntry(entry, (fresh, details) => {
+    const raw = (details[FOLLOWUP_KEY] ?? '').trim()
+    let list: Record<string, unknown>[] = []
+    try {
+      const parsed = JSON.parse(raw || '[]')
+      if (!Array.isArray(parsed)) throw new Error()
+      list = parsed
+    } catch {
+      throw new EntryError('تعذّرت قراءة السجل — نفّذ ذلك من التطبيق')
+    }
+    const same = (x: Record<string, unknown>) => String(x?.['العنوان'] ?? '') === row['العنوان'] && String(x?.['النوع'] ?? '') === row['النوع'] && String(x?.['التاريخ'] ?? '') === row['التاريخ']
+    if (!list.some(same)) throw new EntryError('السجل غير موجود — ربما عُدّل أو حُذف من التطبيق')
+    return { details: { ...fresh.details, [FOLLOWUP_KEY]: JSON.stringify(list.filter((x) => !same(x))) } }
+  })
+}
+
+/** «مستند»: يصير المرفق الأول، أو يُضاف بجانبه في «مرفقات إضافية». */
+export async function addDocument(entry: Entry, file: File) {
+  const path = await uploadAttachment(await currentUserId(), file)
+  await mutateEntry(entry, (fresh, details) => {
+    if ((fresh.attachment_url ?? '').trim()) {
+      const row = { id: String(Date.now()), path, name: file.name, type: 'مستند' }
+      return { details: { ...fresh.details, [EXTRA_FILES_KEY]: appendJson(details[EXTRA_FILES_KEY] ?? '', row) } }
+    }
+    return { attachment_url: path, details: { ...fresh.details, 'نوع المرفق الإضافي': 'مستند', 'اسم المرفق الإضافي': file.name } }
+  })
+}
+
+// ---------------- البنود المرتبطة بفرد (people_management_screen.dart) ----------------
+
+export const LINKED_PERSON_KEY = 'الفرد المرتبط'
+export const MONEY_DIRECTION_KEY = 'اتجاه المبلغ مع الفرد'
+
+type PersonLike = { fullName: string; typeKey?: string; details?: Record<string, unknown> }
+
+/** _recordLinkedTo */
+export function recordLinkedTo(record: Entry, person: PersonLike): boolean {
+  if (record.status === 'محذوف') return false
+  const d = record.details ?? {}
+  const name = person.fullName.trim()
+  if (String(d[LINKED_PERSON_KEY] ?? '').trim() === name) return true
+  const personId = String(person.details?.['الرقم التعريفي'] ?? '').trim()
+  if (personId && (record.entry_type === 'عهدة مالية' || record.entry_type === 'دين / قرض / سلفة')) {
+    const holder = String(d['عهدة_مسندة_إلى'] ?? '').trim()
+    const owner = String(d['عهدة_مالك_المعرّف'] ?? '').trim()
+    if (holder === personId || owner === personId) return true
+  }
+  if (person.typeKey === 'person_self' && (record.entry_type === 'مستند' || record.entry_type === 'ضمانات')) return true
+  if (record.entry_type === 'أدوية') {
+    const who = String(d['لمن هذا الدواء'] ?? '').trim()
+    if (person.typeKey === 'person_self') return who === 'أدوية لي'
+    if (who === 'أدوية لشخص آخر') return String(d['اسم المستفيد'] ?? '').trim() === name
+    return who === name
+  }
+  return false
+}
+
+export type LinkedAdd = { label: string; type: string; prefill: Record<string, string>; link: Record<string, string> }
+
+const isEmployee = (p: PersonLike & { categoryName?: string; additionalCategoryNames?: string[] }) =>
+  p.typeKey === 'person_employee' || p.categoryName === 'موظف' || (p.additionalCategoryNames ?? []).includes('موظف')
+
+/** خيارات «+» في تفاصيل الفرد: مالية له/عليه، والمتابعة والتخطيط، والأدوية (_addFinance، _addFollowUp، _addMedicine). */
+export function linkedAdds(person: PersonLike & { categoryName?: string; additionalCategoryNames?: string[] }): { group: string; items: LinkedAdd[] }[] {
+  const name = person.fullName.trim()
+  const base = { [LINKED_PERSON_KEY]: name }
+  const money = (tab: 0 | 1): LinkedAdd[] => {
+    const link = { ...base, [MONEY_DIRECTION_KEY]: tab === 0 ? 'له' : 'عليه' }
+    const items: LinkedAdd[] = []
+    if (tab === 0)
+      for (const category of [...(isEmployee(person) ? [] : ['الراتب/معاش']), 'تعويض واسترجاع مصروف', 'كاش باك'])
+        items.push({ label: `إيراد — ${category}`, type: 'إيراد', prefill: { 'التصنيف الرئيسي': category }, link })
+    items.push({ label: 'دين / قرض / سلفة', type: 'دين / قرض / سلفة', prefill: { 'نوع الدين': tab === 0 ? 'لي — يدين لي' : 'له — أدين له', 'اسم الجهة': name }, link })
+    return items
+  }
+  const self = person.typeKey === 'person_self'
+  return [
+    { group: 'إضافة مبلغ له', items: money(0) },
+    { group: 'إضافة مبلغ عليه', items: money(1) },
+    { group: 'المتابعة والتخطيط', items: FOLLOWUP_TYPES.map((x) => ({ label: x, type: x, prefill: {}, link: base })) },
+    {
+      group: 'أدوية',
+      items: [
+        {
+          label: 'أدوية',
+          type: 'أدوية',
+          prefill: { 'لمن هذا الدواء': self ? 'أدوية لي' : 'أدوية لشخص آخر' },
+          link: self ? base : { ...base, 'اسم المستفيد': name },
+        },
+      ],
+    },
+  ]
 }

@@ -98,6 +98,11 @@ function FieldInput({
   const { t } = useI18n()
   const value = values[field.label] ?? ''
 
+  // عنوان قسم داخل النموذج (مثل «تفاصيل الرعاية» في الأدوية).
+  if (field.kind === 'header') {
+    return <p className="col-span-2 mt-1 text-[13px] font-extrabold text-title">{t(field.label)}</p>
+  }
+
   if (field.kind === 'toggle') {
     const on = value === 'نعم'
     return (
@@ -436,14 +441,19 @@ function InstallmentsTable({
 
 const dmyOf = (d: Date) => `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}`
 
-function FormBody({ form, entry, onDone }: { form: EntryForm; entry?: Entry; onDone: (message: string) => void }) {
+function FormBody({ form, entry, prefill, link, onDone }: { form: EntryForm; entry?: Entry; prefill?: Values; link?: Record<string, string>; onDone: (message: string) => void }) {
   const { t } = useI18n()
   const currency = useCurrency()
   const qc = useQueryClient()
   const { profile } = useSession()
   const store = useStore()
   const me = { fnd: profile?.fnd_id ?? '', name: publicName(store.data, profile?.display_name ?? '') }
-  const start = useMemo(() => initialValues(form, entry, currency), [form, entry, currency])
+  const start = useMemo(() => {
+    const init = initialValues(form, entry, currency)
+    // القيم المعبّأة مسبقًا (من تفاصيل فرد) لحقول النموذج وحدها.
+    if (!entry && prefill) for (const [k, v] of Object.entries(prefill)) if (k in init.values) init.values[k] = v
+    return init
+  }, [form, entry, currency, prefill])
   const [values, setValues] = useState<Values>(start.values)
   const [custom, setCustomState] = useState<Values>(start.custom)
   const [file, setFile] = useState<File | null>(null)
@@ -462,7 +472,7 @@ function FormBody({ form, entry, onDone }: { form: EntryForm; entry?: Entry; onD
   const count = isInstallment ? installmentCount(values['عدد الأقساط'] ?? '') : 0
   const visibleRows = instStore.slice(0, count)
   const installments = equalSplit ? splitEqually(values['المبلغ الإجمالي'] ?? '', visibleRows) : visibleRows
-  const extras = { me, installments: isInstallment ? installments : undefined, equalSplit }
+  const extras = { me, installments: isInstallment ? installments : undefined, equalSplit, link: entry ? undefined : link }
 
   function ask() {
     const problem = validate(form, values, custom, { me: me.fnd, installments: extras.installments })
@@ -572,13 +582,29 @@ function FormBody({ form, entry, onDone }: { form: EntryForm; entry?: Entry; onD
 }
 
 /** إضافة: اختيار النوع ثم نموذجه. تعديل: نموذج السجل مباشرة. */
-export function PersonalEditor({ open, entry, onClose, onSaved }: { open: boolean; entry?: Entry; onClose: () => void; onSaved: (message: string) => void }) {
+export function PersonalEditor({
+  open,
+  entry,
+  startType,
+  prefill,
+  link,
+  onClose,
+  onSaved,
+}: {
+  open: boolean
+  entry?: Entry
+  startType?: string
+  prefill?: Values
+  link?: Record<string, string>
+  onClose: () => void
+  onSaved: (message: string) => void
+}) {
   const { t, dir } = useI18n()
   const { hidden } = useSession()
   const [type, setType] = useState<string | null>(null)
   useEffect(() => {
-    if (open) setType(entry ? entry.entry_type : null)
-  }, [open, entry])
+    if (open) setType(entry ? entry.entry_type : (startType ?? null))
+  }, [open, entry, startType])
   const form = type ? FORMS[type] : null
   const Back = dir === 'rtl' ? ChevronRight : ChevronLeft
   // الفئات التي أخفتها الإدارة لا تُعرض للإضافة.
@@ -591,13 +617,13 @@ export function PersonalEditor({ open, entry, onClose, onSaved }: { open: boolea
     <Sheet open={open} onClose={onClose}>
       {form ? (
         <>
-          {!entry && (
+          {!entry && !startType && (
             <button type="button" onClick={() => setType(null)} className="mb-2 flex items-center gap-1 text-[12px] font-bold text-brand">
               <Back className="size-4" />
               {t('اختر نوعًا آخر')}
             </button>
           )}
-          <FormBody key={`${type}-${entry?.id ?? 'new'}`} form={form} entry={entry} onDone={onSaved} />
+          <FormBody key={`${type}-${entry?.id ?? 'new'}`} form={form} entry={entry} prefill={prefill} link={link} onDone={onSaved} />
         </>
       ) : (
         <div>
@@ -623,9 +649,11 @@ export function PersonalEditor({ open, entry, onClose, onSaved }: { open: boolea
               </div>
             ))}
           </div>
-          <p className="mt-5 rounded-inner bg-surface px-4 py-3 text-[12px] text-sub">
-            {t('من التطبيق فقط حاليًا:')} {APP_ONLY_TYPES.map((x) => t(x)).join('، ')}
-          </p>
+          {APP_ONLY_TYPES.length > 0 && (
+            <p className="mt-5 rounded-inner bg-surface px-4 py-3 text-[12px] text-sub">
+              {t('من التطبيق فقط حاليًا:')} {APP_ONLY_TYPES.map((x) => t(x)).join('، ')}
+            </p>
+          )}
         </div>
       )}
     </Sheet>
