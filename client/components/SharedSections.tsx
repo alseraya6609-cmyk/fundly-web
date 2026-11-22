@@ -30,6 +30,7 @@ import { Confirm } from './Confirm'
 import { FileButton } from './FileButton'
 import { MemberPicker } from './SharedEditor'
 import { Sheet } from './ui'
+import { PlaceModes } from './PlaceModes'
 
 /*
   من تفاصيل الالتزام المشترك في التطبيق (shared_commitments_screen.dart):
@@ -625,6 +626,7 @@ function SimpleForm({ entry, form, me, onClose, onDone }: { entry: Entry; form: 
         )}
         {!isFollow && !isDoc && (
           <>
+            <PlaceModes onValue={(value) => set('link', value)} />
             {text('title', 'اسم المكان', { required: true })}
             {text('link', 'الموقع أو الرابط', { required: true, hint: 'https://maps.google.com/…' })}
             {text('address', 'العنوان')}

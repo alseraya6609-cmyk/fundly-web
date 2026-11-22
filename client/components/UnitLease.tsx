@@ -3,7 +3,8 @@ import { useQueryClient } from '@tanstack/react-query'
 import { CalendarClock, Loader2, Pencil, Plus, RefreshCw, XCircle } from 'lucide-react'
 import { cn, money } from '@/lib/format'
 import { useI18n } from '@/lib/i18n'
-import { useCurrency, useUnitContracts, useUnitPayments, type Asset, type UnitContract, type UnitPayment } from '@/lib/data'
+import { useCurrency, type Asset, type UnitContract, type UnitPayment } from '@/lib/data'
+import { usePageContracts, usePagePayments } from '@/lib/delegatedAssets'
 import { errorText } from '@/lib/supabase'
 import { AssetError, payExtra } from '@/lib/assetWrite'
 import { setUnitStatus, unitKey, type PropertyUnit } from '@/lib/propertyWrite'
@@ -67,8 +68,8 @@ export function UnitLeaseBox({
   const { t } = useI18n()
   const qc = useQueryClient()
   const currency = useCurrency()
-  const contracts = useUnitContracts()
-  const allPayments = useUnitPayments()
+  const contracts = usePageContracts()
+  const allPayments = usePagePayments()
   const contract = currentContract(contracts.data ?? [], asset, unit)
   const payments = contract ? (allPayments.data ?? []).filter((p) => p.contract_id === contract.id) : []
   const [error, setError] = useState('')
@@ -384,7 +385,7 @@ export function CancelContractFlow({
   const { t } = useI18n()
   const qc = useQueryClient()
   const currency = useCurrency()
-  const contracts = useUnitContracts()
+  const contracts = usePageContracts()
   const sum = cancelSummary(contract, payments, unit.extras)
   const [notes, setNotes] = useState('')
   const [settledMoney, setSettledMoney] = useState(false)

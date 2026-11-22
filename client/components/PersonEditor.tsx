@@ -9,6 +9,7 @@ import { DOC_REMINDERS, PeopleError, createPerson, formOf, isEntityKey, typesFor
 import { FileError, uploadDeviceFile } from '@/lib/files'
 import { Sheet } from './ui'
 import { Confirm } from './Confirm'
+import { PersonPlaceButton } from './PlaceModes'
 
 /*
   نموذج الفرد والجهة كما في التطبيق (_openContactFormSheet): النوع أولًا،
@@ -225,7 +226,10 @@ function Body({ person, entity, onDone }: { person?: Person; entity: boolean; on
           <input dir="auto" value={f.address} onChange={(e) => set('address', e.target.value)} className={inputClass} />
         </Field>
         <Field label="موقعك ومكانك">
-          <input dir="auto" value={f.location} onChange={(e) => set('location', e.target.value)} className={inputClass} />
+          <span className="relative block">
+            <input dir="auto" value={f.location} placeholder={t('موقعك ومكانك')} onChange={(e) => set('location', e.target.value)} className={cn(inputClass, 'pe-11')} />
+            <PersonPlaceButton value={f.location} onValue={(value) => set('location', value)} />
+          </span>
         </Field>
         <div className="col-span-2">
           <p className="mb-1.5 text-[12px] font-bold text-sub">{t('تصنيفات إضافية (اختياري)')}</p>

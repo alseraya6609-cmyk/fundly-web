@@ -894,7 +894,7 @@ export function buildReportHtml(doc: ReportDocument, o: HtmlOptions): string {
   kReportCss من التطبيق كما هو، ومعه هوامش الصفحة التي يضعها التطبيق في إعداد
   الطباعة (12 مم أعلى وأسفل، 11 مم يمينًا ويسارًا)، وعرض الصفحة على الشاشة.
 */
-const REPORT_CSS = `
+export const REPORT_CSS = `
 @page{size:A4;margin:12mm 11mm;}
 *{box-sizing:border-box;margin:0;padding:0;}
 html,body{background:#fff;}

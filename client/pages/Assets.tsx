@@ -1,10 +1,12 @@
 import { useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
-import { Archive, Ban, Building2, CheckCircle2, LayoutGrid, MoreVertical, Pencil, Plus, Snowflake, Trash2 } from 'lucide-react'
+import { Archive, Ban, Building2, CheckCircle2, LayoutGrid, MoreVertical, Pencil, Plus, Snowflake, Trash2, UserCheck } from 'lucide-react'
 import { useI18n } from '@/lib/i18n'
 import { moduleHidden, useSession } from '@/lib/session'
-import { ARCHIVED, assetMeta, assetUnits, useAssetEntries, useAssets, useCurrency, useUnitContracts, useUnitPayments, type Asset, type AssetEntry, type UnitContract, type UnitPayment } from '@/lib/data'
+import { ARCHIVED, assetMeta, assetUnits, useCurrency, type Asset, type AssetEntry, type UnitContract, type UnitPayment } from '@/lib/data'
+import { DELEGATED_LABEL, canAdd, canDelete, canEdit, canPay, canWrite, delegatedOf, usePageAssets, usePageContracts, usePageEntries, usePagePayments, type DelegatedAsset } from '@/lib/delegatedAssets'
+import { DelegationCard } from '@/components/DelegatedAsset'
 import { ASSET_GROUPS, MODULE_COLORS, assetGroup } from '@/lib/catalog'
 import { date, matches, money } from '@/lib/format'
 import { FileButton } from '@/components/FileButton'
@@ -25,7 +27,9 @@ import { PROPERTY_TYPE_KEY, archiveUnit, decodeUnits, toggleUnitFreeze, unitHasO
 import { LeaseForm, type Renewal } from '@/components/LeaseForm'
 import { CancelContractFlow, UnitLeaseBox, currentContract } from '@/components/UnitLease'
 import { contractClosed } from '@/lib/leaseActions'
-import { ActivityLeaseBox, activityPrefill } from '@/components/ActivityLease'
+import { ActivityLeaseBox, activityPrefill, branchPrefill } from '@/components/ActivityLease'
+import { ActivityBranches, ActivityEditSheet, ActivityEmployees } from '@/components/ActivityParts'
+import { branchesOf, isBranch } from '@/lib/activityWrite'
 import { ACTIVITY_TYPES } from '@/lib/lease'
 import { splitLogs as splitAssetLogs } from '@/lib/vehicleWrite'
 
@@ -39,29 +43,35 @@ const ADMIN_TITLE: Record<string, string> = {
 export default function Assets() {
   const { t } = useI18n()
   const { hidden } = useSession()
-  const assets = useAssets()
+  const assets = usePageAssets()
   const [params, setParams] = useSearchParams()
   const [filter, setFilter] = useState('all')
   const [search, setSearch] = useState('')
   const [notice, setNotice] = useState('')
   const flash = (message: string) => {
-    setNotice(message)
+    // المفوَّض حفظ شيئًا في عنصر فوّضه صاحبه: يُقال له إن صاحبه أُشعر.
+    const d = delegatedOf(params.get('open'))
+    setNotice(d && message ? `${t(message)} — ${t('تم الحفظ وإشعار')} ${d.ownerName.trim() || d.ownerFnd} ${t('بما قمت به')}` : message)
     window.setTimeout(() => setNotice(''), 4000)
   }
 
   const groups = ASSET_GROUPS.filter((g) => !ADMIN_TITLE[g.key] || !hidden.has(`category:assets:${ADMIN_TITLE[g.key]}`))
   // المؤرشف مكانه الأرشيف.
-  const all = (assets.data ?? []).filter((a) => a.status !== ARCHIVED && groups.some((g) => g.key === assetGroup(a.category)))
+  const visible = (assets.data ?? []).filter((a) => a.status !== ARCHIVED && groups.some((g) => g.key === assetGroup(a.category)))
+  // الفرع يظهر داخل نشاطه الرئيسي (قسم «الفروع») كالوحدة داخل عقارها.
+  const all = visible.filter((a) => !isBranch(a))
   const list = useMemo(
     () =>
       all.filter(
         (a) =>
-          (filter === 'all' || assetGroup(a.category) === filter) &&
+          (filter === 'all' || (filter === DELEGATED_LABEL ? !!delegatedOf(a.id) : assetGroup(a.category) === filter)) &&
           matches(search, a.title, a.sub_type, a.location_or_type, a.owner, a.tenant),
       ),
     [all, filter, search],
   )
-  const open = all.find((a) => a.id === params.get('open'))
+  const open = visible.find((a) => a.id === params.get('open'))
+  const openDelegation = open ? delegatedOf(open.id) : null
+  const delegatedCount = all.filter((a) => !!delegatedOf(a.id)).length
   const [picking, setPicking] = useState(false)
   const [vehicle, setVehicle] = useState<{ vehicleClass: string; vehicleType: string; asset?: Asset } | null>(null)
   const canAddVehicle = groups.some((g) => g.key === 'equipment')
@@ -72,6 +82,8 @@ export default function Assets() {
   const activityClasses = ACTIVITY_TYPES.filter((x) => !hidden.has(`item:assets:الأنشطة التجارية:${x}`))
   const [addingProperty, setAddingProperty] = useState(false)
   const [editing, setEditing] = useState<{ asset: Asset; type?: string; focusKey?: string } | null>(null)
+  const [editingActivity, setEditingActivity] = useState<Asset | null>(null)
+  const [addingBranch, setAddingBranch] = useState<Asset | null>(null)
 
   if (moduleHidden(hidden, 'assets')) {
     return (
@@ -128,6 +140,7 @@ export default function Assets() {
           if (!n) return null
           return <Chip key={g.key} active={filter === g.key} label={g.label} icon={g.icon} count={n} onClick={() => setFilter(g.key)} />
         })}
+        {delegatedCount > 0 && <Chip active={filter === DELEGATED_LABEL} label={DELEGATED_LABEL} icon={UserCheck} count={delegatedCount} onClick={() => setFilter(DELEGATED_LABEL)} />}
       </div>
 
       <SectionTitle count={list.length}>{t('العناصر')}</SectionTitle>
@@ -149,7 +162,7 @@ export default function Assets() {
                 title={a.title}
                 type={[t(a.sub_type), a.location_or_type].filter(Boolean).join(' · ')}
                 badge={a.status ? a.status : undefined}
-                meta={a.end_date ? `${t('تاريخ الانتهاء')}: ${date(a.end_date)}` : undefined}
+                meta={[delegatedOf(a.id) ? t(DELEGATED_LABEL) : '', a.end_date ? `${t('تاريخ الانتهاء')}: ${date(a.end_date)}` : ''].filter(Boolean).join(' · ') || undefined}
                 onClick={() => setParams({ open: a.id })}
               />
             )
@@ -161,20 +174,23 @@ export default function Assets() {
         {open && (
           <div>
             <p className="text-[12px] font-bold" style={{ color: ASSET_GROUPS.find((g) => g.key === assetGroup(open.category))?.color }}>
-              {t(ASSET_GROUPS.find((g) => g.key === assetGroup(open.category))?.label ?? '')}
+              {t(isBranch(open) ? 'فرع' : (ASSET_GROUPS.find((g) => g.key === assetGroup(open.category))?.label ?? ''))}
             </p>
             <div className="mt-1 flex items-start justify-between gap-2">
               <h2 className="text-[20px] font-extrabold text-title">{open.title}</h2>
               <AssetMenu
                 asset={open}
+                delegation={openDelegation}
                 onEdit={
-                  isCancelledAsset(open)
+                  isCancelledAsset(open) || (openDelegation && !(openDelegation.wholeAsset && canEdit(openDelegation)))
                     ? undefined
                     : assetGroup(open.category) === 'equipment'
                       ? () => setVehicle({ vehicleClass: vehicleClassOf(open), vehicleType: vehicleTypeOf(open), asset: open })
                       : open.category === 'real_estate'
                         ? () => setEditing({ asset: open })
-                        : undefined
+                        : assetGroup(open.category) === 'activity'
+                          ? () => setEditingActivity(open)
+                          : undefined
                 }
                 onDone={(m, leave) => {
                   if (leave) setParams({})
@@ -192,6 +208,7 @@ export default function Assets() {
               <InfoRow label="المبلغ" value={open.amount_label} />
               <InfoRow label="تاريخ الانتهاء" value={date(open.end_date)} />
               <InfoRow label="ملاحظة المتابعة" value={open.followup_note} />
+              <InfoRow label="الوصف العام" value={open.description} />
               <InfoRow label="تاريخ الإضافة" value={date(open.created_at)} />
               {Object.entries(assetMeta(open))
                 .filter(([k, v]) => v && !/[\\/]/.test(v) && !SENSITIVE.test(k))
@@ -200,25 +217,47 @@ export default function Assets() {
                   <InfoRow key={k} label={k} value={v} />
                 ))}
             </div>
-            <AssetUnits asset={open} onEditUnit={(type, focusKey) => setEditing({ asset: open, type, focusKey })} onDone={flash} />
+            {openDelegation && (
+              <DelegationCard
+                asset={open}
+                delegation={openDelegation}
+                onWithdrawn={(m) => {
+                  setParams({})
+                  setNotice(m)
+                  window.setTimeout(() => setNotice(''), 4000)
+                }}
+              />
+            )}
+            <AssetUnits asset={open} delegation={openDelegation} onEditUnit={(type, focusKey) => setEditing({ asset: open, type, focusKey })} onDone={flash} />
             {assetGroup(open.category) === 'activity' && (
               <ActivityLeaseBox
                 asset={open}
-                editable={!isCancelledAsset(open) && open.status !== ARCHIVED}
+                editable={!isCancelledAsset(open) && open.status !== ARCHIVED && canWrite(openDelegation)}
                 onLease={() => setActivityLease({ asset: open })}
                 onRenew={(_, renewal) => setActivityLease({ asset: open, renewal })}
                 onDone={flash}
               />
             )}
-            <AssetContracts asset={open} />
-            <AssetRecords asset={open} onChanged={(m) => (setParams({}), flash(m))} />
+            {assetGroup(open.category) === 'activity' && !isBranch(open) && (
+              <ActivityBranches
+                branches={branchesOf(visible, open.id)}
+                editable={!openDelegation && !isCancelledAsset(open) && open.status !== ARCHIVED}
+                onOpen={(id) => setParams({ open: id })}
+                onAdd={() => setAddingBranch(open)}
+              />
+            )}
+            {assetGroup(open.category) === 'activity' && (
+              <ActivityEmployees asset={open} editable={!isCancelledAsset(open) && open.status !== ARCHIVED && canWrite(openDelegation)} canRemove={canDelete(openDelegation)} onDone={flash} />
+            )}
+            <AssetContracts asset={open} delegation={openDelegation} />
+            <AssetRecords asset={open} delegation={openDelegation} onChanged={(m) => (setParams({}), flash(m))} />
             <p className="mt-5 rounded-inner bg-surface px-4 py-3 text-[12px] text-sub">
               {t(
                 assetGroup(open.category) === 'equipment'
                   ? 'عقود تأجير المركبة والتفويض من التطبيق حاليًا.'
                   : open.category === 'real_estate'
                     ? 'نموذج العقد الرسمي PDF من التطبيق حاليًا.'
-                    : 'تعديل بيانات النشاط وفروعه وموظفيه من التطبيق حاليًا.',
+                    : 'أصول النشاط ومعداته وعملاؤه وموردوه من التطبيق حاليًا.',
               )}
             </p>
           </div>
@@ -245,6 +284,27 @@ export default function Assets() {
           onClose={() => setActivityLease(null)}
           onDone={(m) => {
             setActivityLease(null)
+            flash(m)
+          }}
+        />
+      )}
+      {editingActivity && (
+        <ActivityEditSheet
+          asset={editingActivity}
+          onClose={() => setEditingActivity(null)}
+          onDone={(m) => {
+            setEditingActivity(null)
+            flash(m)
+          }}
+        />
+      )}
+      {addingBranch && (
+        <LeaseForm
+          propertyType=""
+          activity={{ classOptions: activityClasses, prefill: branchPrefill(addingBranch), branch: { parent: addingBranch, count: branchesOf(visible, addingBranch.id).length } }}
+          onClose={() => setAddingBranch(null)}
+          onDone={(m) => {
+            setAddingBranch(null)
             flash(m)
           }}
         />
@@ -300,16 +360,18 @@ export default function Assets() {
 }
 
 /** قائمة الثلاث نقاط: تعديل (المركبة)، إلغاء، أرشفة — بتأكيد كما في التطبيق. */
-function AssetMenu({ asset, onEdit, onDone }: { asset: Asset; onEdit?: () => void; onDone: (message: string, leave: boolean) => void }) {
+function AssetMenu({ asset, delegation, onEdit, onDone }: { asset: Asset; delegation: DelegatedAsset | null; onEdit?: () => void; onDone: (message: string, leave: boolean) => void }) {
   const { t } = useI18n()
   const qc = useQueryClient()
-  const contracts = useUnitContracts()
+  const contracts = usePageContracts()
   const [menu, setMenu] = useState(false)
   const [action, setAction] = useState<'cancel' | 'archive' | null>(null)
   const [blocked, setBlocked] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   if (asset.status === ARCHIVED) return null
+  // الإلغاء والأرشفة لصاحب العنصر وحده؛ المفوَّض يعدّل حسب صلاحياته.
+  if (delegation && !onEdit) return null
   const cancelled = isCancelledAsset(asset)
   const item = (label: string, Icon: typeof Pencil, onClick: () => void, danger = false) => (
     <button
@@ -337,6 +399,7 @@ function AssetMenu({ asset, onEdit, onDone }: { asset: Asset; onEdit?: () => voi
         <div className="mt-4 flex flex-col gap-2">
           {onEdit && item('تعديل بيانات', Pencil, onEdit)}
           {!cancelled &&
+            !delegation &&
             item(
               'إلغاء',
               Ban,
@@ -347,7 +410,7 @@ function AssetMenu({ asset, onEdit, onDone }: { asset: Asset; onEdit?: () => voi
               },
               true,
             )}
-          {item('أرشفة', Archive, () => (setError(''), setAction('archive')))}
+          {!delegation && item('أرشفة', Archive, () => (setError(''), setAction('archive')))}
         </div>
       </Sheet>
       <Sheet open={!!blocked} onClose={() => setBlocked('')}>
@@ -408,10 +471,10 @@ const KINDS: [string, string][] = [
 
 
 /** سجلات الأصل مقسّمة بالنوع، مع الإضافة والتعديل والحذف كما في التطبيق. */
-function AssetRecords({ asset, onChanged }: { asset: Asset; onChanged: (m: string) => void }) {
+function AssetRecords({ asset, delegation, onChanged }: { asset: Asset; delegation: DelegatedAsset | null; onChanged: (m: string) => void }) {
   const { t } = useI18n()
   const qc = useQueryClient()
-  const entries = useAssetEntries()
+  const entries = usePageEntries()
   const mine = (entries.data ?? []).filter((e) => e.asset_id === asset.id)
   const kinds = KINDS.filter(([k]) => mine.some((e) => e.kind === k))
   const [kind, setKind] = useState<string | null>(null)
@@ -421,7 +484,8 @@ function AssetRecords({ asset, onChanged }: { asset: Asset; onChanged: (m: strin
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const active = kind ?? kinds[0]?.[0] ?? null
-  const writable = !['مؤرشف', 'محذوف'].includes(asset.status)
+  // سجلات الأصل للمفوَّض على الأصل كاملًا (سياسة الخادم بالأصل لا بالوحدة).
+  const writable = !['مؤرشف', 'محذوف'].includes(asset.status) && (!delegation || delegation.wholeAsset)
   if (entries.isLoading) return <Loading />
   return (
     <div className="mt-5">
@@ -430,7 +494,7 @@ function AssetRecords({ asset, onChanged }: { asset: Asset; onChanged: (m: strin
           <span className="h-4 w-1 rounded-full bg-gold" />
           {t('السجلات')}
         </p>
-        {writable && (
+        {writable && canAdd(delegation) && (
           <button type="button" onClick={() => setMenu(true)} className="flex h-9 items-center gap-1 rounded-inner bg-brand px-3 text-[12.5px] font-extrabold text-white hover:bg-brand-dark">
             <Plus className="size-4" />
             {t('إضافة')}
@@ -452,8 +516,8 @@ function AssetRecords({ asset, onChanged }: { asset: Asset; onChanged: (m: strin
                 <AssetRecord
                   key={e.id}
                   entry={e}
-                  onEdit={writable && groupOf(e) ? () => setForm({ group: groupOf(e)!, entry: e }) : undefined}
-                  onDelete={writable && canDeleteEntry(e) ? () => (setError(''), setRemoving(e)) : undefined}
+                  onEdit={writable && canEdit(delegation) && groupOf(e) ? () => setForm({ group: groupOf(e)!, entry: e }) : undefined}
+                  onDelete={writable && canDelete(delegation) && canDeleteEntry(e) ? () => (setError(''), setRemoving(e)) : undefined}
                 />
               ))}
           </div>
@@ -566,16 +630,18 @@ function AssetRecord({ entry, onEdit, onDelete }: { entry: AssetEntry; onEdit?: 
   وحدات العقار الحية (units_json بلا المؤرشفة والمحذوفة)، وكل وحدة تُفتح
   بتفاصيلها وأوامرها، و«إضافة وحدة» و«المرافق العامة» كما في صفحة العقار.
 */
-function AssetUnits({ asset, onEditUnit, onDone }: { asset: Asset; onEditUnit: (type: string, focusKey: string) => void; onDone: (m: string) => void }) {
+function AssetUnits({ asset, delegation, onEditUnit, onDone }: { asset: Asset; delegation: DelegatedAsset | null; onEditUnit: (type: string, focusKey: string) => void; onDone: (m: string) => void }) {
   const { t } = useI18n()
   const units = decodeUnits(asset.units_json).filter(unitIsLive)
   const [unit, setUnit] = useState<PropertyUnit | null>(null)
   const [adding, setAdding] = useState<'units' | 'facilities' | null>(null)
   const [leasing, setLeasing] = useState<{ unit?: PropertyUnit; existing?: UnitContract; renewal?: Renewal; multi?: { key: string; name: string }[] } | null>(null)
-  const allContracts = useUnitContracts()
+  const allContracts = usePageContracts()
   const [multiError, setMultiError] = useState('')
   const property = asset.category === 'real_estate'
-  const editable = property && !isCancelledAsset(asset) && asset.status !== ARCHIVED
+  const editable = property && !isCancelledAsset(asset) && asset.status !== ARCHIVED && canWrite(delegation)
+  // إضافة وحدات ومرافق: لصاحب العقار، أو المفوَّض على العقار كاملًا بصلاحية الإضافة.
+  const canGrow = editable && (!delegation || (delegation.wholeAsset && canAdd(delegation)))
   const annexes = Object.entries((asset.annexes ?? {}) as Record<string, unknown>).filter(([, v]) => Number(v) > 0)
   if (!units.length && !editable) return null
   const statuses = [...new Set(units.map((u) => u.status).filter(Boolean))]
@@ -587,7 +653,7 @@ function AssetUnits({ asset, onEditUnit, onDone }: { asset: Asset; onEditUnit: (
           {t('الوحدات')}
           <span className="rounded-full bg-surface px-2 text-[11px] text-sub">{units.length}</span>
         </p>
-        {editable && (
+        {canGrow && (
           <button type="button" onClick={() => setAdding('units')} className="flex items-center gap-1 text-[12.5px] font-extrabold text-brand">
             <Plus className="size-4" />
             {t('إضافة وحدة')}
@@ -619,7 +685,7 @@ function AssetUnits({ asset, onEditUnit, onDone }: { asset: Asset; onEditUnit: (
               <span className="h-4 w-1 rounded-full bg-gold" />
               {t('المرافق العامة')}
             </p>
-            {editable && (
+            {canGrow && (
               <button type="button" onClick={() => setAdding('facilities')} className="flex items-center gap-1 text-[12.5px] font-extrabold text-brand">
                 <Plus className="size-4" />
                 {t('إضافة')}
@@ -644,6 +710,7 @@ function AssetUnits({ asset, onEditUnit, onDone }: { asset: Asset; onEditUnit: (
           asset={asset}
           unit={unit}
           editable={editable}
+          delegation={delegation}
           onClose={() => setUnit(null)}
           onEdit={() => {
             setUnit(null)
@@ -699,6 +766,7 @@ function UnitSheet({
   asset,
   unit,
   editable,
+  delegation,
   onClose,
   onEdit,
   onLease,
@@ -709,6 +777,7 @@ function UnitSheet({
   asset: Asset
   unit: PropertyUnit
   editable: boolean
+  delegation: DelegatedAsset | null
   onClose: () => void
   onEdit: () => void
   onLease: (existing?: UnitContract) => void
@@ -718,8 +787,8 @@ function UnitSheet({
 }) {
   const { t } = useI18n()
   const qc = useQueryClient()
-  const contracts = useUnitContracts()
-  const allPayments = useUnitPayments()
+  const contracts = usePageContracts()
+  const allPayments = usePagePayments()
   // العقد الحالي للوحدة: أحدث عقد غير ملغى (_load).
   const contract = currentContract(contracts.data ?? [], asset, unit)
   const contractPayments = contract ? (allPayments.data ?? []).filter((p) => p.contract_id === contract.id) : []
@@ -764,11 +833,13 @@ function UnitSheet({
           <InfoRow key={k} label={k} value={v} />
         ))}
       </div>
-      {editable && (
+      {editable && canEdit(delegation) && (
         <div className="mt-4 flex gap-2">
-          {action('تعديل', Pencil, onEdit)}
+          {/* تعديل الوحدة من شاشة العقار: للمفوَّض على العقار كاملًا. */}
+          {(!delegation || delegation.wholeAsset) && action('تعديل', Pencil, onEdit)}
           {action(frozen ? 'إلغاء التجميد' : 'تجميد', Snowflake, () => run(() => toggleUnitFreeze(asset.id, key), frozen ? 'أُلغي تجميد الوحدة' : 'جُمّدت الوحدة'))}
-          {action('أرشفة', Archive, () => {
+          {/* الأرشفة لصاحب العقار وحده. */}
+          {!delegation && action('أرشفة', Archive, () => {
             setError('')
             if (contract && unitHasOpenContract(asset.id, key, contracts.data ?? [])) setCancelFirst(true)
             else setArchiving(true)
@@ -817,13 +888,13 @@ const CONTRACT_STATUS: Record<string, string> = {
 }
 
 /** عقود وحدات الأصل ودفعاتها (property_unit_contracts / property_unit_payments). */
-function AssetContracts({ asset }: { asset: Asset }) {
+function AssetContracts({ asset, delegation }: { asset: Asset; delegation: DelegatedAsset | null }) {
   const { t } = useI18n()
   const [paying, setPaying] = useState<UnitPayment | null>(null)
   const [done, setDone] = useState('')
   const currency = useCurrency()
-  const contracts = useUnitContracts()
-  const payments = useUnitPayments()
+  const contracts = usePageContracts()
+  const payments = usePagePayments()
   const mine = (contracts.data ?? []).filter((c) => c.asset_id === asset.id)
   if (!mine.length) return null
   return (
@@ -874,7 +945,7 @@ function AssetContracts({ asset }: { asset: Asset }) {
                         <span className={left > 0.009 ? 'font-bold text-gold-dark' : 'font-bold text-brand'}>
                           {left > 0.009 ? `${t('المتبقي')}: ${money(left)}` : t('مسددة')}
                         </span>
-                        {left > 0.009 && asset.status !== ARCHIVED && (
+                        {left > 0.009 && asset.status !== ARCHIVED && canPay(delegation) && (
                           <button type="button" onClick={() => setPaying(p)} className="h-7 rounded-inner bg-brand px-2.5 text-[11.5px] font-extrabold text-white hover:bg-brand-dark">
                             {t('تسجيل السداد')}
                           </button>

@@ -449,6 +449,8 @@ function withPayments(details: Record<string, string>, index: number, rows: Reco
 }
 
 /** _roscaWithEnoughEnd: النهاية المحفوظة لا تسبق آخر دورة. */
+export const roscaWithEnoughEnd = (details: Record<string, string>): Record<string, string> => ({ ...details, ...enoughEnd(details) })
+
 function enoughEnd(details: Record<string, string>): Record<string, string> {
   const end = roscaParseDate(details[END_KEY])
   if (!end || !roscaParseDate(details['تاريخ البداية'])) return {}

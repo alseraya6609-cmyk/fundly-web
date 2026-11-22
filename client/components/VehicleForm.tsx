@@ -3,7 +3,8 @@ import { useQueryClient } from '@tanstack/react-query'
 import { ChevronLeft, Loader2, MinusCircle, Paperclip, Plus, X } from 'lucide-react'
 import { useI18n } from '@/lib/i18n'
 import { useSession } from '@/lib/session'
-import { useCurrency, useUnitContracts } from '@/lib/data'
+import { useCurrency } from '@/lib/data'
+import { usePageContracts } from '@/lib/delegatedAssets'
 import { errorText } from '@/lib/supabase'
 import { FileError, uploadDeviceFile } from '@/lib/files'
 import { AssetError } from '@/lib/assetWrite'
@@ -99,7 +100,7 @@ export function VehicleForm({ vehicleClass, vehicleType, initial, assetId, onClo
   const { t } = useI18n()
   const qc = useQueryClient()
   const currency = useCurrency()
-  const contracts = useUnitContracts()
+  const contracts = usePageContracts()
   const editing = !!initial
   const marine = isMarine(vehicleClass)
   const road = isRoadVehicle(vehicleClass, vehicleType)

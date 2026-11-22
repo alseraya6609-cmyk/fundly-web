@@ -3,7 +3,8 @@ import { useQueryClient } from '@tanstack/react-query'
 import { CalendarClock, Maximize2, Plus, Printer, RefreshCw, X, XCircle } from 'lucide-react'
 import { cn, money } from '@/lib/format'
 import { useI18n } from '@/lib/i18n'
-import { useAssetEntries, useCurrency, useUnitContracts, useUnitPayments, type Asset, type UnitContract, type UnitPayment } from '@/lib/data'
+import { useCurrency, type Asset, type UnitContract, type UnitPayment } from '@/lib/data'
+import { usePageContracts, usePageEntries, usePagePayments } from '@/lib/delegatedAssets'
 import { errorText, supabase } from '@/lib/supabase'
 import { splitLogs } from '@/lib/vehicleWrite'
 import { ACTIVITY_UNIT_KEY, activityLicenseFromMeta } from '@/lib/activityWrite'
@@ -55,6 +56,14 @@ export function activityPrefill(asset: Asset) {
   return encodeLease(lease)
 }
 
+/** _addBranch: رخصة الفرع تبدأ ببيانات النشاط الرئيسي، وموقع الفرع يُكتب له. */
+export function branchPrefill(parent: Asset) {
+  const lease = emptyLease()
+  lease.license = activityLicenseFromMeta(splitLogs(parent.logs_json).meta, parent.title, parent.sub_type)
+  delete lease.license[K.activityLocation]
+  return encodeLease(lease)
+}
+
 const isoOf = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
 export function ActivityLeaseBox({
@@ -73,9 +82,9 @@ export function ActivityLeaseBox({
   const { t } = useI18n()
   const qc = useQueryClient()
   const currency = useCurrency()
-  const contracts = useUnitContracts()
-  const allPayments = useUnitPayments()
-  const entries = useAssetEntries()
+  const contracts = usePageContracts()
+  const allPayments = usePagePayments()
+  const entries = usePageEntries()
   const contract = activityContract(contracts.data ?? [], asset.id)
   const payments = contract ? (allPayments.data ?? []).filter((p) => p.contract_id === contract.id) : []
   const [error, setError] = useState('')

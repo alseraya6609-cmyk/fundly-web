@@ -3,6 +3,7 @@ import { AssetError } from './assetWrite'
 import { changeReminders, isoOf, type Reminder } from './reminders'
 import { endDateColumn, joinLogs, splitLogs, uid, withColumnFallback } from './vehicleWrite'
 import { K, type Lease, type Row } from './lease'
+import type { Asset } from './data'
 
 /*
   النشاط التجاري من عقد إيجاره (projects_activities_screen.dart):
@@ -193,4 +194,130 @@ export async function mergeActivityMeta(assetId: string, leaseMeta: Row) {
     if (saveError) throw saveError
     if (saved && saved.length) return
   }
+}
+
+// ---------------- الفروع والموظفون ----------------
+
+export const BRANCH_PREFIX = 'branch:'
+export const isBranch = (a: { serial_number?: string | null }) => String(a.serial_number ?? '').startsWith(BRANCH_PREFIX)
+export const branchesOf = (all: Asset[], parentId: string) => all.filter((a) => String(a.serial_number ?? '') === `${BRANCH_PREFIX}${parentId}`)
+
+/** _isoAssetDate: يوم/شهر/سنة أو سنة-شهر-يوم ← سنة-شهر-يوم. */
+function isoAssetDate(raw: string): string | null {
+  const text = (raw ?? '').trim()
+  if (!text || text === UNSET) return null
+  const iso = isoOf(text)
+  return iso ? iso.slice(0, 10) : null
+}
+
+/** «إضافة فرع» ← رخصة الفرع (_addBranch: createActivity): يرث من الرئيسي ما لم يُكتب له. */
+export async function createBranchAsset(l: Lease, parent: Asset, branchCount: number): Promise<{ id: string; title: string }> {
+  const user = await uid()
+  const meta = activityMetaFromLease(l)
+  const name = (l.license[K.tradeName] ?? '').trim()
+  const type = (l.license[K.activityClass] ?? '').trim()
+  const location = (meta[ACT_KEYS.location] ?? '').trim()
+  const licenseEnd = (meta[ACT_KEYS.licenseEnd] ?? '').trim()
+  // الاسم التجاري نفسه للنشاط الرئيسي: يُميَّز الفرع برقمه.
+  const title = !name || name === parent.title ? `${parent.title} - فرع ${branchCount + 1}` : name
+  const parentEnd = String(parent.end_date ?? '')
+  const row = {
+    user_id: user,
+    title,
+    sub_type: type || parent.sub_type,
+    category: 'business',
+    status: 'نشط',
+    location_or_type: location || parent.location_or_type || UNSET,
+    amount_label: parent.amount_label ?? '',
+    followup_note: `فرع تابع للنشاط الرئيسي: ${parent.title}`,
+    owner: parent.owner ?? UNSET,
+    tenant: UNSET,
+    rent_value: UNSET,
+    end_date: isoAssetDate(licenseEnd || (parentEnd === UNSET ? '' : parentEnd)),
+    annual_yield: UNSET,
+    occupancy_rate: 0,
+    contract_progress: 0,
+    payment_progress: 0,
+    documents_progress: 0,
+    needs_attention: false,
+    icon_color: null,
+    cover_url: null,
+    description: (parent as Asset & { description?: string | null }).description ?? '',
+    annexes: {},
+    map_link: '',
+    quick_add_enabled: false,
+    units_json: '[]',
+    employees_json: '[]',
+    serial_number: `${BRANCH_PREFIX}${parent.id}`,
+    is_frozen: false,
+    is_pinned: false,
+    is_sublease: false,
+    latitude: null,
+    longitude: null,
+    logs_json: joinLogs(meta, []),
+  }
+  const created = await withColumnFallback<{ id: string }>(row, (body) => supabase.from('project_assets').insert(body).select('id').single())
+  if (!created?.id) throw new AssetError('تعذّر إنشاء الفرع')
+  return { id: created.id, title }
+}
+
+export type Employee = Record<string, string>
+export const EMPLOYEE_KEYS = ['الاسم', 'الوظيفة', 'الجوال', 'تاريخ التعيين', 'الجنسية', 'المستندات'] as const
+
+/** _decodeStringMaps(employees_json) */
+export function employeesOf(a: { employees_json?: string | null }): Employee[] {
+  try {
+    const list = JSON.parse(String(a.employees_json ?? '') || '[]')
+    if (!Array.isArray(list)) return []
+    return list.filter((x) => x && typeof x === 'object').map((x) => Object.fromEntries(Object.entries(x as Record<string, unknown>).map(([k, v]) => [k, String(v ?? '')])))
+  } catch {
+    return []
+  }
+}
+
+/**
+  _addEmployee / _removeEmployee: القائمة كاملة تُحفظ في employees_json مع سطر
+  في السجل، بحماية updated_at كي لا يضيع تعديل من التطبيق في الأثناء.
+*/
+export async function saveEmployees(assetId: string, change: (list: Employee[]) => Employee[], log: string) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const { data, error } = await supabase.from('project_assets').select('id, employees_json, logs_json, updated_at').eq('id', assetId).maybeSingle()
+    if (error) throw error
+    const fresh = data as { id: string; employees_json: string | null; logs_json: string | null; updated_at: string } | null
+    if (!fresh) throw new AssetError('السجل غير موجود — ربما عُدّل أو حُذف من التطبيق')
+    const next = change(employeesOf(fresh))
+    const patch: Record<string, unknown> = { employees_json: JSON.stringify(next) }
+    if (log) {
+      const { meta, logs } = splitLogs(fresh.logs_json)
+      patch.logs_json = joinLogs(meta, [log, ...logs])
+    }
+    const { data: saved, error: saveError } = await supabase.from('project_assets').update(patch).eq('id', assetId).eq('updated_at', fresh.updated_at).select('id')
+    if (saveError) throw saveError
+    if (saved && saved.length) return
+  }
+  throw new AssetError('تغيّر السجل أثناء الحفظ — أعد المحاولة')
+}
+
+/**
+  «تعديل البيانات» للنشاط (ThreeDotMenuAction.edit): الاسم والموقع والمدير
+  والوصف. الفارغ في الاسم والموقع والمدير يُبقي القديم، والوصف يُحفظ كما كُتب.
+  ملحقات النشاط (أصوله ومعداته) لا تُمسّ.
+*/
+export async function saveActivityBasics(assetId: string, v: { title: string; location: string; owner: string; description: string }) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const { data, error } = await supabase.from('project_assets').select('id, title, location_or_type, owner, updated_at').eq('id', assetId).maybeSingle()
+    if (error) throw error
+    const fresh = data as { id: string; title: string; location_or_type: string | null; owner: string | null; updated_at: string } | null
+    if (!fresh) throw new AssetError('السجل غير موجود — ربما عُدّل أو حُذف من التطبيق')
+    const patch = {
+      title: v.title.trim() || fresh.title,
+      location_or_type: v.location.trim() || fresh.location_or_type,
+      owner: v.owner.trim() || fresh.owner,
+      description: v.description.trim(),
+    }
+    const { data: saved, error: saveError } = await supabase.from('project_assets').update(patch).eq('id', assetId).eq('updated_at', fresh.updated_at).select('id')
+    if (saveError) throw saveError
+    if (saved && saved.length) return
+  }
+  throw new AssetError('تغيّر السجل أثناء الحفظ — أعد المحاولة')
 }

@@ -508,7 +508,7 @@ function DelegatedData({ d, onClose }: { d: Delegation; onClose: () => void }) {
       <p className="text-[18px] font-extrabold text-title">{t('البيانات المفوَّضة')}</p>
       {owner && <p className="text-[12.5px] text-sub">{owner}</p>}
       <p className="mt-3 rounded-inner bg-surface px-3 py-2 text-[12px] text-sub">
-        {t(manages ? 'اضغط على السجل لإدارته حسب صلاحياتك — وكل ما تفعله يصل إشعاره للمالك. العقار يُدار من التطبيق.' : 'للاطلاع فقط — تظهر هنا سجلات المالك في نطاق التفويض وأثناء مدته.')}
+        {t(manages ? 'اضغط على السجل لإدارته حسب صلاحياتك — وكل ما تفعله يصل إشعاره للمالك. العقارات والأنشطة والمركبات المفوَّضة تديرها من صفحة «الأصول».' : 'للاطلاع فقط — تظهر هنا سجلات المالك في نطاق التفويض وأثناء مدته.')}
       </p>
       {notice && <p className="mt-2 rounded-inner bg-brand-soft px-3 py-2 text-[12px] font-bold text-brand">{t(notice)}</p>}
       <div className="mt-3 flex flex-col gap-2">

@@ -2,6 +2,7 @@ import { supabase } from './supabase'
 import type { Asset, UnitContract } from './data'
 import { AssetError } from './assetWrite'
 import { joinLogs, splitLogs, uid, withColumnFallback } from './vehicleWrite'
+import { delegatedFresh, isUnitScoped, saveDelegatedUnits } from './delegatedAssets'
 
 /*
   العقارات (projects_activities_screen.dart):
@@ -518,6 +519,12 @@ type Fresh = {
 const FRESH_COLUMNS = 'id, title, sub_type, description, location_or_type, owner, map_link, latitude, longitude, annexes, units_json, logs_json, updated_at'
 
 async function readFresh(assetId: string): Promise<Fresh> {
+  // المفوَّض على وحدات بعينها: العقار بوحداته وحدها من الخادم.
+  if (isUnitScoped(assetId)) {
+    const row = await delegatedFresh<Fresh>(assetId)
+    if (!row) throw new AssetError('السجل غير موجود — ربما عُدّل أو حُذف من التطبيق')
+    return row
+  }
   const { data, error } = await supabase.from('project_assets').select(FRESH_COLUMNS).eq('id', assetId).maybeSingle()
   if (error) throw error
   if (!data) throw new AssetError('السجل غير موجود — ربما عُدّل أو حُذف من التطبيق')
@@ -530,6 +537,12 @@ const annexMap = (raw: unknown): Record<string, number> =>
 const sortedJson = (m: Record<string, number>) => JSON.stringify(Object.keys(m).sort().map((k) => [k, m[k]]))
 
 async function writeGuarded(assetId: string, updatedAt: string, patch: Record<string, unknown>) {
+  // updateAsset للمفوَّض على وحدات: تُحفظ بيانات وحداته فقط (fundly_save_delegated_units).
+  if (isUnitScoped(assetId)) {
+    if (Object.keys(patch).some((k) => k !== 'units_json')) throw new AssetError('أنت مفوَّض على وحدات بعينها — بيانات العقار يعدّلها صاحبه')
+    await saveDelegatedUnits(assetId, String(patch.units_json ?? '[]'))
+    return true
+  }
   const saved = await withColumnFallback<{ id: string }[]>(patch, (body) => supabase.from('project_assets').update(body).eq('id', assetId).eq('updated_at', updatedAt).select('id'))
   return !!saved && saved.length > 0
 }
@@ -751,9 +764,14 @@ async function mutateUnit(assetId: string, key: string, change: (u: PropertyUnit
 
 /** حالة الوحدة بعد حفظ عقدها (_setUnitStatus): «مسودة» أو «مؤجرة». */
 export async function setUnitStatus(assetId: string, key: string, status: string) {
-  const { data, error } = await supabase.from('project_assets').select('units_json').eq('id', assetId).maybeSingle()
-  if (error) throw error
-  const unit = decodeUnits((data as { units_json: string | null } | null)?.units_json).find((u) => unitIsLive(u) && unitKey(u) === key)
+  let units: string | null = null
+  if (isUnitScoped(assetId)) units = (await delegatedFresh<Fresh>(assetId))?.units_json ?? null
+  else {
+    const { data, error } = await supabase.from('project_assets').select('units_json').eq('id', assetId).maybeSingle()
+    if (error) throw error
+    units = (data as { units_json: string | null } | null)?.units_json ?? null
+  }
+  const unit = decodeUnits(units).find((u) => unitIsLive(u) && unitKey(u) === key)
   if (!unit || unit.status === status) return
   await mutateUnit(assetId, key, (u) => ({ ...u, status }))
 }

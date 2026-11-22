@@ -43,6 +43,11 @@ import {
 } from '@/lib/personalWrite'
 import { Sheet } from './ui'
 import { Confirm } from './Confirm'
+import { GeoFieldButton, PlaceModes } from './PlaceModes'
+
+const GEO_FIELD = 'الموقع الجغرافي'
+const PLACES_FORM = 'مواقع وأماكن'
+const PLACE_LINK = 'الموقع أو الرابط'
 
 /*
   إضافة وتعديل في «أنا» — نموذج التطبيق نفسه (_openFinancialEntryForm):
@@ -248,6 +253,18 @@ function FieldInput({
     return (
       <Label field={field}>
         <input type="time" value={value} onChange={(e) => set(field.label, e.target.value)} className={inputClass} />
+      </Label>
+    )
+  }
+
+  // «الموقع الجغرافي»: زر في آخر الحقل يجلب الموقع الحالي (_fetchCurrentLocation).
+  if (field.label === GEO_FIELD) {
+    return (
+      <Label field={field}>
+        <span className="relative block">
+          <input dir="auto" value={value} placeholder={field.hint ? t(field.hint) : undefined} onChange={(e) => set(field.label, e.target.value)} className={cn(inputClass, 'pe-11')} />
+          <GeoFieldButton filled={!!value.trim()} onValue={(v) => set(field.label, v)} />
+        </span>
       </Label>
     )
   }
@@ -508,6 +525,7 @@ function FormBody({ form, entry, prefill, link, onDone }: { form: EntryForm; ent
       </p>
       <p className="mt-0.5 text-[12px] text-muted">{t(form.subtitle)}</p>
       <div className="mt-4 grid grid-cols-2 gap-3">
+        {form.label === PLACES_FORM && <PlaceModes personal onValue={(value) => set(PLACE_LINK, value)} />}
         {fields.map((field) =>
           form.label === 'عهدة مالية' && field.label === 'اسم المستلم' ? (
             <CustodyRecipient key={field.label} values={values} set={set} me={me} />

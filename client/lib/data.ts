@@ -49,6 +49,7 @@ export type Asset = {
   description?: string | null
   map_link?: string | null
   units_json?: string | null
+  employees_json?: string | null
   created_at: string
   updated_at: string
 }

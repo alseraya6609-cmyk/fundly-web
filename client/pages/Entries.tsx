@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Archive, Ban, CheckCircle2, ClipboardList, HandCoins, LayoutGrid, Pencil, Plus, Receipt, Trash2, TrendingUp, UserRound, UsersRound, type LucideIcon } from 'lucide-react'
+import { Archive, Ban, CheckCircle2, ClipboardList, FileText, HandCoins, LayoutGrid, Pencil, Plus, Receipt, Trash2, TrendingUp, UserRound, UsersRound, type LucideIcon } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useI18n } from '@/lib/i18n'
 import { moduleHidden, useSession } from '@/lib/session'
@@ -20,7 +20,9 @@ import { CustodyPanel, SettleDialog } from '@/components/CustodyPanel'
 import { FollowupPanel } from '@/components/FollowupPanel'
 import { cancelDebt, custodyRemaining, isOwnerView, needsSettlement, settleBeforeDelete, settleCustody, type SettleMode } from '@/lib/custodyWrite'
 import { EntryError, MEDICATION_ACTIONS, logMedication } from '@/lib/personalWrite'
-import { LEDGER_TYPES, inHistoryForMe } from '@/lib/sharedWrite'
+import { LEDGER_TYPES, archivedForMe, inHistoryForMe } from '@/lib/sharedWrite'
+import { commitmentDoc } from '@/lib/sharedPdf'
+import { useRecordShare } from '@/components/RecordShare'
 import { SharedActions, SharedBanners, SharedListFooter } from '@/components/SharedLifecycle'
 import { ExpenseForm } from '@/components/ExpenseForm'
 import { SharedEditor } from '@/components/SharedEditor'
@@ -347,6 +349,10 @@ function EntryDetails({
   const me = { fnd: profile?.fnd_id ?? '', name: publicName(store.data, profile?.display_name ?? '') }
   const money$ = page === 'personal' ? paymentActions(entry, me.fnd) : { pay: false, increase: false }
   const ownCurrency = currencyOf(entry.details, currency)
+  // «مشاركة كمستند PDF» للالتزام المشترك (_shareCommitment).
+  const pdf = useRecordShare()
+  const shareSharedPdf = () =>
+    pdf.start((letterhead) => commitmentDoc(entry, { letterhead, t, currency: t(ownCurrency), status: archivedForMe(entry, me.fnd) ? 'مؤرشف' : entry.status }))
   const [moneyForm, setMoneyForm] = useState<'pay' | 'increase' | null>(null)
   // العهدة والدين: «إلغاء» بتسوية، والحذف بعد التسوية (_handleMenuAction).
   const isCustody = page === 'personal' && entry.entry_type === 'عهدة مالية'
@@ -626,6 +632,17 @@ function EntryDetails({
           <SharedActions entry={entry} currency={currency} onChanged={(m) => onChanged?.(m)} />
         </div>
       )}
+      {page === 'shared' && (
+        <button
+          type="button"
+          onClick={shareSharedPdf}
+          className="mt-2 flex h-11 w-full items-center justify-center gap-1.5 rounded-inner border border-brand text-[13px] font-extrabold text-brand hover:bg-brand-soft"
+        >
+          <FileText className="size-4" />
+          {t('مشاركة كمستند PDF')}
+        </button>
+      )}
+      {pdf.ui}
       {page === 'shared' && <SharedBanners entry={entry} onChanged={(m) => onChanged?.(m)} />}
       <Confirm
         open={!!action}
@@ -750,7 +767,7 @@ function EntryDetails({
               : entry.user_id && user?.id && entry.user_id !== user.id
                 ? 'بيانات هذا الالتزام يعدّلها صاحبه.'
                 : 'هذا النوع يُعدَّل من التطبيق حاليًا.'
-            : 'مشاركة الالتزام PDF وتحديد موقعك الحالي للمكان من التطبيق حاليًا.',
+            : 'التعديل هنا يحفظ في الالتزام المشترك ويظهر لبقية الأعضاء في التطبيق.',
         )}
       </p>
     </div>

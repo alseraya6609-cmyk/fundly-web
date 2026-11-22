@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Check, CheckCheck, Gift, Handshake, Paperclip, PlusCircle, Repeat, Trash2, Undo2, X } from 'lucide-react'
+import { Check, CheckCheck, FileText, Gift, Handshake, Paperclip, PlusCircle, Repeat, Trash2, Undo2, X } from 'lucide-react'
 import { useStore, type Entry } from '@/lib/data'
 import { errorText } from '@/lib/supabase'
 import { publicName as publicNameOf } from '@/lib/requestsWrite'
@@ -62,6 +62,8 @@ import {
 } from '@/lib/shared'
 import { startOfToday } from '@/lib/metrics'
 import { FileButton } from './FileButton'
+import { useRecordShare } from './RecordShare'
+import { settlementDoc } from '@/lib/sharedPdf'
 
 const STATUS_COLOR: Record<string, string> = {
   مكتملة: '#0A5A50',
@@ -396,9 +398,21 @@ export function SettleForm({
     }
   }
 
+  // مستند التسوية PDF رسميًا (_shareSettlementPdf) للتحويلات المختارة بتاريخ اليوم.
+  const pdf = useRecordShare()
+  const today = new Date()
+  const sharePdf = () =>
+    pdf.start(() => settlementDoc(entry, selected, `${today.getDate()}/${today.getMonth() + 1}/${today.getFullYear()}`, { t, currency: cur, memberList: names }), false)
+
   return (
     <Sheet open onClose={onClose}>
-      <p className="text-[18px] font-extrabold text-title">{t('تسوية الحساب')}</p>
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[18px] font-extrabold text-title">{t('تسوية الحساب')}</p>
+        <button type="button" onClick={sharePdf} title={t('مشاركة كمستند PDF')} aria-label={t('مشاركة كمستند PDF')} className="grid size-9 place-items-center rounded-full bg-surface text-brand hover:bg-line">
+          <FileText className="size-4" />
+        </button>
+      </div>
+      {pdf.ui}
       {transfers.length === 0 ? (
         <p className="mt-4 rounded-inner bg-brand-soft px-4 py-3 text-[13px] font-bold text-brand">{t('الحساب مسوّى — لا توجد مبالغ معلّقة بين الأعضاء')}</p>
       ) : (

@@ -3,8 +3,9 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Printer, Calculator, CheckSquare, Edit3, FileText, Landmark, Loader2, Pencil, Plus, Shield, Square, Trash2, User, Users, Wand2, X } from 'lucide-react'
 import { cn } from '@/lib/format'
 import { useI18n } from '@/lib/i18n'
-import { useCurrency, usePeopleAll, useStore, useUnitContracts, type Asset, type UnitContract } from '@/lib/data'
-import { ACTIVITY_UNIT_KEY, activityMetaFromLease, activityReminders, createActivityAsset, mergeActivityMeta } from '@/lib/activityWrite'
+import { useCurrency, usePeopleAll, useStore, type Asset, type UnitContract } from '@/lib/data'
+import { usePageContracts } from '@/lib/delegatedAssets'
+import { ACTIVITY_UNIT_KEY, activityMetaFromLease, activityReminders, createActivityAsset, createBranchAsset, mergeActivityMeta } from '@/lib/activityWrite'
 import { errorText, supabase } from '@/lib/supabase'
 import { AssetError } from '@/lib/assetWrite'
 import { splitLogs } from '@/lib/vehicleWrite'
@@ -180,19 +181,21 @@ export function LeaseForm({
   existing?: UnitContract
   renewal?: Renewal
   multi?: { key: string; name: string }[]
-  activity?: { classOptions: string[]; prefill?: string }
+  /** branch: «إضافة فرع» لنشاط رئيسي (_addBranch) — يُنشأ الفرع من رخصته عند الحفظ. */
+  activity?: { classOptions: string[]; prefill?: string; branch?: { parent: Asset; count: number } }
   onClose: () => void
   onDone: (message: string) => void
 }) {
   const { t } = useI18n()
   const qc = useQueryClient()
-  const contracts = useUnitContracts()
+  const contracts = usePageContracts()
   const store = useStore()
   const currency = useCurrency()
   const isMulti = !!multi && !existing
   const key = unit ? unitKey(unit) : activity ? ACTIVITY_UNIT_KEY : ''
   const unitName = unit?.name ?? (activity && asset ? asset.title : '')
-  const propertyTitle = asset?.title ?? 'نشاط تجاري جديد'
+  const branch = !asset ? activity?.branch : undefined
+  const propertyTitle = asset?.title ?? (branch ? `${t('فرع جديد لنشاط:')} ${branch.parent.title}` : 'نشاط تجاري جديد')
   const numbers = useMemo(() => contractNumbers((contracts.data ?? []).filter((c) => !!asset && c.asset_id === asset.id), key, existing), [contracts.data, asset, key, existing])
   const [lease, setLease] = useState<Lease>(() => initialLease(asset, unit, existing, renewal, { multi, activity }))
   const [chosen, setChosen] = useState<string[]>([])
@@ -576,7 +579,7 @@ export function LeaseForm({
       let assetId = asset?.id ?? createdId
       let createdTitle = ''
       if (!assetId && activity) {
-        const created = await createActivityAsset(l, currency)
+        const created = branch ? await createBranchAsset(l, branch.parent, branch.count) : await createActivityAsset(l, currency)
         assetId = created.id
         createdTitle = created.title
         setCreatedId(created.id)
@@ -610,8 +613,10 @@ export function LeaseForm({
           : t('حُفظ العقد كمسودة.')
         : renewal
           ? `${t('تم تجديد العقد بنجاح — رقم العقد الجديد')} ${contractNumber(saved)} (${t('السابق')} ${renewal.oldNo})`
-          : activity && !asset
-            ? t('تمت إضافة النشاط التجاري وعقد الإيجار')
+          : branch
+            ? `${t('تم إنشاء الفرع:')} ${createdTitle || tradeName}`
+            : activity && !asset
+              ? t('تمت إضافة النشاط التجاري وعقد الإيجار')
             : t('تم حفظ العقد')
       onDone(paymentsIssue ? `${base}\n${t('حُفظ العقد، وتعذّر توليد الدفعات الآن')} (${paymentsIssue})` : base)
     } catch (e) {
@@ -622,7 +627,7 @@ export function LeaseForm({
     }
   }
 
-  const title = renewal ? 'تجديد العقد' : multi && !existing ? 'عقد متعدد الوحدات' : activity ? 'عقد إيجار النشاط' : 'عقد الإيجار'
+  const title = renewal ? 'تجديد العقد' : multi && !existing ? 'عقد متعدد الوحدات' : branch ? 'عقد إيجار الفرع' : activity ? 'عقد إيجار النشاط' : 'عقد الإيجار'
   const payDue = (row: Row) => {
     const cheque = (row[K.collectMethod] ?? '') === 'شيك' ? (row[K.paymentChequeDate] ?? '').trim() : ''
     const due = cheque || (row[K.paymentDue] ?? '').trim()
