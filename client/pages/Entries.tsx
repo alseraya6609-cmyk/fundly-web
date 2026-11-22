@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Archive, CheckCircle2, ClipboardList, LayoutGrid, Pencil, Plus, Trash2, UserRound, UsersRound, type LucideIcon } from 'lucide-react'
+import { Archive, CheckCircle2, ClipboardList, LayoutGrid, Pencil, Plus, Receipt, Trash2, UserRound, UsersRound, type LucideIcon } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useI18n } from '@/lib/i18n'
 import { moduleHidden, useSession } from '@/lib/session'
@@ -14,7 +14,8 @@ import { SharedDetails } from '@/components/SharedDetails'
 import { PersonalEditor } from '@/components/PersonalEditor'
 import { Confirm } from '@/components/Confirm'
 import { archiveEntry, canEdit, trashEntry } from '@/lib/personalWrite'
-import { SharedError, setSharedArchived } from '@/lib/sharedWrite'
+import { LEDGER_TYPES, SharedError, setSharedArchived } from '@/lib/sharedWrite'
+import { ExpenseForm } from '@/components/ExpenseForm'
 import { errorText } from '@/lib/supabase'
 
 type Group = { key: string; label: string; icon: LucideIcon }
@@ -99,6 +100,7 @@ function EntriesPage({
   // الإضافة والتعديل في «أنا» فقط (المشتركة من التطبيق حاليًا).
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<Entry | null>(null)
+  const [expenseFor, setExpenseFor] = useState<Entry | null>(null)
   const [notice, setNotice] = useState('')
   const flash = (message: string) => {
     setNotice(message)
@@ -199,6 +201,7 @@ function EntriesPage({
             page={page}
             editable={page === 'personal' && canEdit(open, user?.id)}
             onEdit={() => setEditing(open)}
+            onAddExpense={() => setExpenseFor(open)}
             onChanged={(message) => {
               setParams({})
               flash(message)
@@ -206,6 +209,18 @@ function EntriesPage({
           />
         )}
       </Sheet>
+      {expenseFor && (
+        <ExpenseForm
+          open
+          entry={expenseFor}
+          currency={currencyOf(expenseFor.details, currency)}
+          onClose={() => setExpenseFor(null)}
+          onDone={(message) => {
+            setExpenseFor(null)
+            flash(message)
+          }}
+        />
+      )}
       {page === 'personal' && (
         <PersonalEditor
           open={adding || !!editing}
@@ -277,6 +292,7 @@ function EntryDetails({
   page,
   editable = false,
   onEdit,
+  onAddExpense,
   onChanged,
 }: {
   entry: Entry
@@ -286,6 +302,7 @@ function EntryDetails({
   page: string
   editable?: boolean
   onEdit?: () => void
+  onAddExpense?: () => void
   onChanged?: (message: string) => void
 }) {
   const { t } = useI18n()
@@ -356,17 +373,31 @@ function EntryDetails({
         </div>
       )}
       {page === 'shared' && (
-        <button
-          type="button"
-          onClick={() => {
-            setActionError('')
-            setAction('shared-archive')
-          }}
-          className="mt-4 flex h-11 w-full items-center justify-center gap-1.5 rounded-inner bg-surface text-[13px] font-extrabold text-body hover:bg-line"
-        >
-          <Archive className="size-4" />
-          {t('أرشفة')}
-        </button>
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          {LEDGER_TYPES.includes(entry.entry_type) && !['مؤرشف', 'ملغاة', 'محذوف'].includes(entry.status) ? (
+            <button
+              type="button"
+              onClick={onAddExpense}
+              className="flex h-11 items-center justify-center gap-1.5 rounded-inner bg-brand text-[13px] font-extrabold text-white hover:bg-brand-dark"
+            >
+              <Receipt className="size-4" />
+              {t('مصروف جديد')}
+            </button>
+          ) : (
+            <span />
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              setActionError('')
+              setAction('shared-archive')
+            }}
+            className="flex h-11 items-center justify-center gap-1.5 rounded-inner bg-surface text-[13px] font-extrabold text-body hover:bg-line"
+          >
+            <Archive className="size-4" />
+            {t('أرشفة')}
+          </button>
+        </div>
       )}
       <Confirm
         open={!!action}
@@ -487,7 +518,7 @@ function EntryDetails({
             ? editable
               ? 'التعديل هنا يحفظ في حسابك ويظهر في التطبيق. الدفعات والسجلات الخاصة بالالتزام من التطبيق.'
               : 'هذا النوع يُعدَّل من التطبيق حاليًا.'
-            : 'الإضافة والتعديل والحذف في الالتزامات المشتركة من التطبيق حاليًا.',
+            : 'المصروفات تُضاف هنا، وبقية الإضافة والتعديل والحذف في الالتزامات المشتركة من التطبيق حاليًا.',
         )}
       </p>
     </div>
