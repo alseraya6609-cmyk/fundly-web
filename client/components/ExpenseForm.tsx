@@ -10,6 +10,8 @@ import { publicName as publicNameOf } from '@/lib/requestsWrite'
 import { EXPENSE_CATEGORIES, EXPENSE_METHODS, SharedError, activeOn, addSharedExpense, myMemberName, needsApproval, parseMoney } from '@/lib/sharedWrite'
 import { Sheet } from './ui'
 import { Confirm } from './Confirm'
+import { ReceiptPicker } from './SharedDetails'
+import { FileError, uploadDeviceFile } from '@/lib/files'
 
 /*
   «مصروف جديد» في الالتزام المشترك — نموذج التطبيق (_InlineExpenseForm):
@@ -65,6 +67,7 @@ function Body({ entry, currency, onDone }: { entry: Entry; currency: string; onD
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
   const [saveError, setSaveError] = useState('')
+  const [file, setFile] = useState<File | null>(null)
 
   const amount = parseMoney(amountText)
   const foreign = cur !== currency
@@ -148,6 +151,7 @@ function Body({ entry, currency, onDone }: { entry: Entry; currency: string; onD
     setBusy(true)
     setSaveError('')
     try {
+      const receipt = file ? await uploadDeviceFile(file) : ''
       const status = await addSharedExpense(
         entry,
         {
@@ -162,6 +166,7 @@ function Body({ entry, currency, onDone }: { entry: Entry; currency: string; onD
           participants: list,
           method,
           shares: Object.fromEntries(list.map((n) => [n, input(n)])),
+          receipt,
         },
         me,
         myNames,
@@ -172,7 +177,7 @@ function Body({ entry, currency, onDone }: { entry: Entry; currency: string; onD
       setConfirming(false)
       onDone(status === 'معتمد' ? 'تمت إضافة المصروف بنجاح' : 'أُرسل المصروف لموافقة المسؤول')
     } catch (e) {
-      setSaveError(e instanceof SharedError ? e.message : errorText(e) || 'تعذّر الحفظ. حاول مرة أخرى.')
+      setSaveError(e instanceof SharedError || e instanceof FileError ? e.message : errorText(e) || 'تعذّر الحفظ. حاول مرة أخرى.')
     } finally {
       setBusy(false)
     }
@@ -308,7 +313,9 @@ function Body({ entry, currency, onDone }: { entry: Entry; currency: string; onD
           <p className={cn('mt-1.5 text-[12px] font-bold', split[1] ? 'text-brand' : 'text-gold-dark')}>{split[0]}</p>
         </div>
       </div>
-      <p className="mt-3 rounded-inner bg-surface px-3 py-2 text-[11px] text-sub">{t('الفاتورة أو الإيصال يُرفق من التطبيق.')}</p>
+      <div className="mt-3">
+        <ReceiptPicker file={file} onChange={setFile} label="إرفاق فاتورة / إيصال" />
+      </div>
       {error && <p className="mt-3 rounded-inner bg-danger-soft px-3 py-2 text-[12px] font-bold text-danger">{t(error)}</p>}
       <button
         type="button"

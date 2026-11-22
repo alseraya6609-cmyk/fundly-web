@@ -1,10 +1,11 @@
 import { useState, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Check, PlusCircle, X } from 'lucide-react'
+import { Check, Handshake, Paperclip, PlusCircle, X } from 'lucide-react'
 import { useStore, type Entry } from '@/lib/data'
 import { errorText } from '@/lib/supabase'
 import { publicName as publicNameOf } from '@/lib/requestsWrite'
-import { SharedError, addContribution, decideLedgerItem, isLumpSum } from '@/lib/sharedWrite'
+import { SharedError, addContribution, decideLedgerItem, isLumpSum, recordSettlements } from '@/lib/sharedWrite'
+import { FileError, uploadDeviceFile } from '@/lib/files'
 import { Confirm } from './Confirm'
 import { Sheet } from './ui'
 import { useI18n } from '@/lib/i18n'
@@ -75,11 +76,11 @@ function Stat({ label, value, color }: { label: string; value: string; color?: s
  * تفاصيل الالتزام المشترك كما يعرضها التطبيق: الأعضاء ودعواتهم، والميزانية
  * والمصروفات والأرصدة والتسوية، أو دورات الجمعية. للعرض فقط.
  */
-/** صلاحيات الكتابة في الدفتر من الموقع (المسؤول يوافق ويضيف ميزانية). */
+/** الكتابة في الدفتر من الموقع: المسؤول يوافق، وكل عضو يضيف ميزانية ويسجّل التسوية. */
 type LedgerActions = {
   manager: boolean
-  decide: (kind: 'expense' | 'contribution', id: string, label: string) => void
   addBudget?: () => void
+  settle?: () => void
 }
 
 export function SharedDetails({
@@ -115,6 +116,7 @@ export function SharedDetails({
   const manager = writable && iAmManager(details, fnd, myNames)
   const [deciding, setDeciding] = useState<{ kind: 'expense' | 'contribution'; id: string; label: string; approve: boolean } | null>(null)
   const [budgetOpen, setBudgetOpen] = useState(false)
+  const [settleOpen, setSettleOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -142,14 +144,11 @@ export function SharedDetails({
     }
   }
 
-  const actions: LedgerActions | undefined = manager
+  const actions: LedgerActions | undefined = writable
     ? {
         manager,
-        decide: (kind, id, label) => {
-          setError('')
-          setDeciding({ kind, id, label, approve: true })
-        },
         addBudget: isLumpSum(details) ? () => setBudgetOpen(true) : undefined,
+        settle: () => setSettleOpen(true),
       }
     : undefined
 
@@ -219,9 +218,24 @@ export function SharedDetails({
           fnd={fnd}
           myNames={myNames}
           publicName={shownName}
+          manager={manager}
           onClose={() => setBudgetOpen(false)}
           onDone={(message) => {
             setBudgetOpen(false)
+            onChanged?.(message)
+          }}
+        />
+      )}
+      {entry && settleOpen && (
+        <SettleForm
+          entry={entry}
+          details={details}
+          names={names}
+          cur={cur}
+          shown={shown}
+          onClose={() => setSettleOpen(false)}
+          onDone={(message) => {
+            setSettleOpen(false)
             onChanged?.(message)
           }}
         />
@@ -230,7 +244,138 @@ export function SharedDetails({
   )
 }
 
-/** «ميزانية إضافية» (_openContributionForm) — من الموقع للمسؤول. */
+/** زر إرفاق صورة الإيصال/الفاتورة (يُرفع عند الحفظ). */
+export function ReceiptPicker({ file, onChange, label }: { file: File | null; onChange: (f: File | null) => void; label: string }) {
+  const { t } = useI18n()
+  return (
+    <label className="flex h-11 cursor-pointer items-center justify-center gap-2 rounded-field border border-brand px-3 text-[13px] font-extrabold text-brand hover:bg-brand-soft">
+      <Paperclip className="size-4" />
+      <span className="truncate">{file ? file.name : t(label)}</span>
+      {file && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.preventDefault()
+            onChange(null)
+          }}
+          aria-label={t('إزالة')}
+        >
+          <X className="size-4" />
+        </button>
+      )}
+      <input type="file" className="hidden" accept="image/*,application/pdf" onChange={(e) => onChange(e.target.files?.[0] ?? null)} />
+    </label>
+  )
+}
+
+/** «تسوية الحساب» (_openSettleUpSheet): التحويلات المقترحة، وتسجيل تحويلات الأعضاء المختارين. */
+function SettleForm({
+  entry,
+  details,
+  names,
+  cur,
+  shown,
+  onClose,
+  onDone,
+}: {
+  entry: Entry
+  details: Record<string, unknown>
+  names: string[]
+  cur: string
+  shown: (n: string) => string
+  onClose: () => void
+  onDone: (message: string) => void
+}) {
+  const { t } = useI18n()
+  const qc = useQueryClient()
+  const transfers = settleTransfers(details, names)
+  const involves = (tr: { from: string; to: string }, n: string) => tr.from === n || tr.to === n
+  const involved = names.filter((n) => transfers.some((tr) => involves(tr, n)))
+  const [picked, setPicked] = useState<Set<string>>(() => new Set(involved))
+  const [file, setFile] = useState<File | null>(null)
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const selected = transfers.filter((tr) => [...picked].some((n) => involves(tr, n)))
+
+  async function save() {
+    setBusy(true)
+    setError('')
+    try {
+      const receipt = file ? await uploadDeviceFile(file) : ''
+      const fully = await recordSettlements(entry, [...picked], transfers, receipt)
+      await qc.invalidateQueries({ queryKey: ['shared'] })
+      setConfirming(false)
+      onDone(fully ? 'تمت تسوية الحساب بالكامل — الحالة: مكتملة' : 'تم تسجيل التسوية')
+    } catch (e) {
+      setError(e instanceof SharedError || e instanceof FileError ? e.message : errorText(e) || 'تعذّر الحفظ. حاول مرة أخرى.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Sheet open onClose={onClose}>
+      <p className="text-[18px] font-extrabold text-title">{t('تسوية الحساب')}</p>
+      {transfers.length === 0 ? (
+        <p className="mt-4 rounded-inner bg-brand-soft px-4 py-3 text-[13px] font-bold text-brand">{t('الحساب مسوّى — لا توجد مبالغ معلّقة بين الأعضاء')}</p>
+      ) : (
+        <>
+          <div className="mt-4 flex flex-col gap-2 rounded-inner bg-surface p-2">
+            {transfers.map((tr, i) => (
+              <div key={i} className={`card-inner flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-[12px] ${selected.includes(tr) ? '' : 'opacity-50'}`}>
+                <span dir="auto" className="text-ink">
+                  <b>{shown(tr.from)}</b> {t('يدفع إلى')} <b>{shown(tr.to)}</b>
+                </span>
+                <span className="font-bold text-gold-dark">{money(tr.amount, cur)}</span>
+              </div>
+            ))}
+          </div>
+          <p className="mb-1.5 mt-4 text-[12px] font-extrabold text-title">{t('الأعضاء')}</p>
+          <div className="flex flex-wrap gap-2">
+            {involved.map((n) => {
+              const on = picked.has(n)
+              return (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => {
+                    const next = new Set(picked)
+                    if (on) next.delete(n)
+                    else next.add(n)
+                    setPicked(next)
+                  }}
+                  className={`h-9 rounded-full px-3 text-[12px] font-bold ${on ? 'bg-brand-soft text-brand' : 'bg-field text-sub'}`}
+                >
+                  {on ? '✓ ' : ''}
+                  {shown(n)}
+                </button>
+              )
+            })}
+          </div>
+          <div className="mt-4">
+            <ReceiptPicker file={file} onChange={setFile} label="إرفاق إيصال" />
+          </div>
+          {error && !confirming && <p className="mt-3 rounded-inner bg-danger-soft px-3 py-2 text-[12px] font-bold text-danger">{t(error)}</p>}
+          <button
+            type="button"
+            disabled={!selected.length}
+            onClick={() => {
+              setError('')
+              setConfirming(true)
+            }}
+            className="mt-5 flex h-13 w-full items-center justify-center rounded-field bg-brand py-3.5 text-[15px] font-extrabold text-white hover:bg-brand-dark disabled:opacity-50"
+          >
+            {t('تسجيل التسوية')} ({selected.length})
+          </button>
+        </>
+      )}
+      <Confirm open={confirming} title="تأكيد" message={t('هل تريد تسجيل التسوية؟')} busy={busy} error={error} onConfirm={save} onCancel={() => setConfirming(false)} />
+    </Sheet>
+  )
+}
+
+/** «ميزانية إضافية» (_openContributionForm): من المسؤول معتمدة، ومن العضو بصورة الإيصال وبانتظار الموافقة. */
 function BudgetForm({
   entry,
   members,
@@ -239,6 +384,7 @@ function BudgetForm({
   fnd,
   myNames,
   publicName,
+  manager,
   onClose,
   onDone,
 }: {
@@ -249,12 +395,14 @@ function BudgetForm({
   fnd: string
   myNames: string[]
   publicName: string
+  manager: boolean
   onClose: () => void
   onDone: (message: string) => void
 }) {
   const { t } = useI18n()
   const qc = useQueryClient()
   const now = new Date()
+  const [file, setFile] = useState<File | null>(null)
   const [member, setMember] = useState(members[0] ?? '')
   const [amountText, setAmountText] = useState('')
   const [dateValue, setDateValue] = useState(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`)
@@ -271,12 +419,14 @@ function BudgetForm({
     setBusy(true)
     setError('')
     try {
-      await addContribution(entry, member, amount, dmy, note, fnd, myNames, publicName)
+      const receipt = file ? await uploadDeviceFile(file) : ''
+      const status = await addContribution(entry, member, amount, dmy, note, fnd, myNames, publicName, receipt)
       await qc.invalidateQueries({ queryKey: ['shared'] })
       setConfirming(false)
-      onDone(`${shown(member)} ${t('أضاف')} ${money(amount, cur)} ${t('كميزانية إضافية')}`)
+      const added = `${shown(member)} ${t('أضاف')} ${money(amount, cur)} ${t('كميزانية إضافية')}`
+      onDone(status === 'معتمد' ? added : `${added} — ${t('أُرسلت لموافقة المسؤول')}`)
     } catch (e) {
-      setError(e instanceof SharedError ? e.message : errorText(e) || 'تعذّر الحفظ. حاول مرة أخرى.')
+      setError(e instanceof SharedError || e instanceof FileError ? e.message : errorText(e) || 'تعذّر الحفظ. حاول مرة أخرى.')
     } finally {
       setBusy(false)
     }
@@ -314,6 +464,9 @@ function BudgetForm({
           <span className="text-[12px] font-bold text-sub">{t('ملاحظة')}</span>
           <textarea rows={2} dir="auto" value={note} onChange={(e) => setNote(e.target.value)} className={`${fieldClass} h-auto py-3`} />
         </label>
+        <div className="col-span-2">
+          <ReceiptPicker file={file} onChange={setFile} label={manager ? 'إرفاق صورة الإيصال' : 'إرفاق صورة الإيصال *'} />
+        </div>
       </div>
       {error && !confirming && <p className="mt-3 rounded-inner bg-danger-soft px-3 py-2 text-[12px] font-bold text-danger">{t(error)}</p>}
       <button
@@ -321,6 +474,10 @@ function BudgetForm({
         onClick={() => {
           if (amount <= 0) {
             setError('اكتب مبلغ المساهمة')
+            return
+          }
+          if (!manager && !file) {
+            setError('أرفق صورة الإيصال أو الفاتورة لإثبات المبلغ')
             return
           }
           setError('')
@@ -437,9 +594,11 @@ function LedgerView({
   const settles = settlements(details)
   if (!all.length && !contribs.length && !settles.length && !hasBudget(details)) return null
   const addBudget = actions?.addBudget
+  const settle = actions?.settle
   const spent = total(details)
   const nets = memberNets(details, names)
   const transfers = settleTransfers(details, names)
+  const pending = transfers.length > 0
   const byCategory = totalsByCategory(details)
 
   return (
@@ -451,15 +610,29 @@ function LedgerView({
           <Stat label="المتبقي" value={money(remaining(details), cur)} color={remaining(details) < -0.01 ? '#C4392E' : '#0A5A50'} />
         )}
       </div>
-      {addBudget && (
-        <button
-          type="button"
-          onClick={addBudget}
-          className="mt-2 flex h-10 items-center gap-1.5 rounded-inner border border-line bg-white px-3 text-[12px] font-extrabold text-brand hover:bg-brand-soft"
-        >
-          <PlusCircle className="size-4" />
-          {t('ميزانية إضافية')}
-        </button>
+      {(addBudget || (settle && pending)) && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {settle && pending && (
+            <button
+              type="button"
+              onClick={settle}
+              className="flex h-10 items-center gap-1.5 rounded-inner bg-brand px-3 text-[12px] font-extrabold text-white hover:bg-brand-dark"
+            >
+              <Handshake className="size-4" />
+              {t('تسوية الحساب')}
+            </button>
+          )}
+          {addBudget && (
+            <button
+              type="button"
+              onClick={addBudget}
+              className="flex h-10 items-center gap-1.5 rounded-inner border border-line bg-white px-3 text-[12px] font-extrabold text-brand hover:bg-brand-soft"
+            >
+              <PlusCircle className="size-4" />
+              {t('ميزانية إضافية')}
+            </button>
+          )}
+        </div>
       )}
 
       {byCategory.length > 0 && (
@@ -516,7 +689,7 @@ function LedgerView({
                 {e.status !== 'معتمد' && <span className={e.status === PENDING ? 'font-bold text-gold-dark' : 'font-bold text-danger'}> · {t(e.status)}</span>}
               </p>
               {e.receipt && <FileButton className="mt-1" file={{ localPath: e.receipt }} label="الفاتورة" />}
-              {actions && e.status === PENDING && (
+              {actions?.manager && e.status === PENDING && (
                 <DecideButtons
                   onApprove={() => onDecide('expense', e.id, e.description || t('مصروف'), true)}
                   onReject={() => onDecide('expense', e.id, e.description || t('مصروف'), false)}
@@ -538,7 +711,7 @@ function LedgerView({
                 {c.status !== 'معتمد' ? ` · ${t(c.status)}` : ''}
               </span>
               {c.receipt && <FileButton file={{ localPath: c.receipt }} label="الإيصال" />}
-              {actions && c.status === PENDING && (
+              {actions?.manager && c.status === PENDING && (
                 <span className="w-full">
                   <DecideButtons
                     onApprove={() => onDecide('contribution', c.id, `${shown(c.member)} — ${money(c.amount, cur)}`, true)}

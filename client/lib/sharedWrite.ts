@@ -173,6 +173,7 @@ export type ExpenseInput = {
   participants: string[]
   method: string
   shares: Record<string, number>
+  receipt?: string
 }
 
 /** يضيف المصروف. يعيد «معتمد» أو «بانتظار الموافقة». */
@@ -199,7 +200,7 @@ export async function addSharedExpense(entry: Entry, input: ExpenseInput, me: st
       method: input.method,
       shares: input.method === 'بالتساوي' ? {} : Object.fromEntries(input.participants.map((n) => [n, input.shares[n] ?? 0])),
       note: '',
-      receipt: '',
+      receipt: input.receipt ?? '',
       category: input.category,
       subcategory: input.subcategory,
       status,
@@ -306,10 +307,13 @@ export async function decideLedgerItem(entry: Entry, kind: 'expense' | 'contribu
   })
 }
 
-/** ميزانية إضافية من المسؤول (معتمدة مباشرة). */
-export async function addContribution(entry: Entry, member: string, amount: number, date: string, note: string, me: string, myNames: string[], publicName: string) {
+/** ميزانية إضافية: معتمدة من المسؤول، وبانتظار موافقته من غيره (مع صورة الإيصال إلزامًا). يعيد الحالة. */
+export async function addContribution(entry: Entry, member: string, amount: number, date: string, note: string, me: string, myNames: string[], publicName: string, receipt = ''): Promise<string> {
+  let status = 'معتمد'
   await mutateShared(entry, (details) => {
-    if (!iAmManager(details, me, myNames)) throw new SharedError('الميزانية الإضافية من الموقع للمسؤول وحده — العضو يضيفها من التطبيق مع صورة الإيصال')
+    const manager = iAmManager(details, me, myNames)
+    if (!manager && !receipt) throw new SharedError('أرفق صورة الإيصال أو الفاتورة لإثبات المبلغ')
+    status = manager ? 'معتمد' : 'بانتظار الموافقة'
     const raw = (details[CONTRIBUTIONS_KEY] ?? '').trim()
     let list = '[]'
     if (raw) {
@@ -320,10 +324,57 @@ export async function addContribution(entry: Entry, member: string, amount: numb
         throw new SharedError('تعذّرت قراءة السجل — نفّذ ذلك من التطبيق')
       }
     }
-    const item = { id: String(Date.now()), member, amount, date, note: note.trim(), status: 'معتمد', submittedBy: publicName }
+    const item: Record<string, unknown> = { id: String(Date.now()), member, amount, date, note: note.trim(), status, submittedBy: publicName }
+    if (receipt) item.receipt = receipt
     const body = list.slice(0, list.lastIndexOf(']')).trim()
     return { [CONTRIBUTIONS_KEY]: `${body}${body === '[' ? '' : ','}${JSON.stringify(item)}]` }
   })
+  return status
+}
+
+// ---------------- تسوية الحساب (_openSettleUpSheet) ----------------
+
+const SETTLEMENTS_KEY = 'سجل التسويات'
+
+/**
+  تسجيل تحويلات التسوية المقترحة للأعضاء المختارين (كل تحويلات العضو
+  المختار). تُحسب التحويلات من أحدث نسخة؛ فإن تغيّرت عمّا عُرض يُطلب
+  الفتح من جديد. يعيد true إن صار الحساب مسوّى بالكامل (الحالة «مكتملة»).
+*/
+export async function recordSettlements(entry: Entry, picked: string[], shown: { from: string; to: string; amount: number }[], receipt = ''): Promise<boolean> {
+  let fully = false
+  await mutateShared(entry, (details) => {
+    const members = memberNames(details)
+    const transfers = settleTransfers(details, members)
+    const same =
+      transfers.length === shown.length &&
+      transfers.every((t, i) => t.from === shown[i].from && t.to === shown[i].to && Math.abs(t.amount - shown[i].amount) < 0.01)
+    if (!same) throw new SharedError('تغيّرت الأرصدة منذ فتح التسوية — افتحها من جديد')
+    const selected = transfers.map((t, i) => [t, i] as const).filter(([t]) => picked.some((n) => t.from === n || t.to === n))
+    if (!selected.length) throw new SharedError('اختر عضوًا واحدًا على الأقل')
+    const raw = (details[SETTLEMENTS_KEY] ?? '').trim()
+    let list = '[]'
+    if (raw) {
+      try {
+        if (!Array.isArray(JSON.parse(raw))) throw new Error()
+        list = raw
+      } catch {
+        throw new SharedError('تعذّرت قراءة السجل — نفّذ ذلك من التطبيق')
+      }
+    }
+    const now = new Date()
+    const stamp = now.getTime()
+    const rows = selected.map(([t, i]) => {
+      const row: Record<string, unknown> = { id: String(stamp + i), from: t.from, to: t.to, amount: t.amount, date: `${now.getDate()}/${now.getMonth() + 1}/${now.getFullYear()}`, note: '' }
+      if (receipt) row.receipt = receipt
+      return JSON.stringify(row)
+    })
+    const body = list.slice(0, list.lastIndexOf(']')).trim()
+    const next = `${body}${body === '[' ? '' : ','}${rows.join(',')}]`
+    fully = settleTransfers({ ...details, [SETTLEMENTS_KEY]: next }, members).length === 0
+    return { [SETTLEMENTS_KEY]: next }
+  })
+  return fully
 }
 
 /** الدفعة المقطوعة (_isLumpSum): فيها ميزانية تُزاد بمساهمات إضافية. */
