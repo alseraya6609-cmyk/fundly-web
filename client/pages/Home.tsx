@@ -1,12 +1,12 @@
 import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Building2, CalendarDays, ClipboardList, Inbox, LayoutDashboard, UsersRound, UserRound, type LucideIcon } from 'lucide-react'
+import { Building2, CalendarDays, ClipboardList, FileText, Inbox, LayoutDashboard, UsersRound, UserRound, Wallet, type LucideIcon } from 'lucide-react'
 import { useI18n } from '@/lib/i18n'
 import { moduleHidden, useSession } from '@/lib/session'
 import { useAssets, useInbox, usePeople, usePersonal, useShared, useStore } from '@/lib/data'
 import { ASSET_GROUPS, MODULE_COLORS, assetGroup, personalGroup, PERSONAL_GROUPS, sharedLabel, SHARED_GROUPS } from '@/lib/catalog'
 import { matches } from '@/lib/format'
-import { needsFollowup, useDocuments } from '@/lib/documents'
+import { useMetrics } from '@/lib/metrics'
 import { Chevron, IconBadge, SearchField, SectionTitle } from '@/components/ui'
 
 // home_layout_store.dart: الترتيب الافتراضي ومفاتيح الحفظ.
@@ -66,12 +66,12 @@ export default function Home() {
 
   const requests = inbox.data?.length ?? 0
 
-  // «مستندات تحتاج متابعة» لكل قسم: منتهية أو تنتهي خلال 30 يومًا (كما في التطبيق).
-  const { docs } = useDocuments()
-  const docsFollow: Record<ModuleId, number> = {
-    people: docs.filter((d) => (d.module === 'الأفراد والجهات' || d.module === 'الالتزامات الشخصية') && needsFollowup(d)).length,
-    shared: docs.filter((d) => d.module === 'الالتزامات المشتركة' && needsFollowup(d)).length,
-    assets: docs.filter((d) => ['العقارات', 'الأنشطة التجارية', 'المركبات ووسائل النقل'].includes(d.module) && needsFollowup(d)).length,
+  // «مالية تحتاج متابعة» و«مستندات تحتاج متابعة» بحساب التطبيق نفسه (metrics.ts).
+  const { metrics, loading: metricsLoading } = useMetrics()
+  const follow: Record<ModuleId, [number, number]> = {
+    people: [metrics.peopleMoney, metrics.peopleDocs],
+    shared: [metrics.sharedMoney, metrics.sharedDocs],
+    assets: [metrics.assetsMoney, metrics.assetsDocs],
   }
 
   return (
@@ -137,19 +137,21 @@ export default function Home() {
                     <Chevron className="mt-1" />
                   </div>
                   <p className="-mt-1 text-[15px] font-extrabold leading-snug text-title">{t(m.title)}</p>
-                  <div className="card-inner flex flex-col gap-1 px-3 py-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[12px] text-sub">{t('السجلات')}</span>
-                      <span className="text-[17px] font-extrabold" style={{ color: m.color }}>
-                        {m.count ?? '…'}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-[12px] text-sub">{t('مستندات تحتاج متابعة')}</span>
-                      <span className="text-[15px] font-extrabold" style={{ color: docsFollow[id] ? '#A6691A' : '#8C9A97' }}>
-                        {docsFollow[id]}
-                      </span>
-                    </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {(
+                      [
+                        ['مالية تحتاج متابعة', Wallet, '#A6691A', follow[id][0]],
+                        ['مستندات تحتاج متابعة', FileText, '#0A5A50', follow[id][1]],
+                      ] as const
+                    ).map(([label, Icon, color, n]) => (
+                      <div key={label} className="card-inner flex flex-col gap-1 px-2.5 py-2">
+                        <span className="text-[11px] leading-snug text-sub">{t(label)}</span>
+                        <span className="flex items-center gap-1.5">
+                          <span className="text-[17px] font-extrabold text-title">{metricsLoading ? '…' : n}</span>
+                          <Icon className="size-4" style={{ color }} />
+                        </span>
+                      </div>
+                    ))}
                   </div>
                 </Link>
               )

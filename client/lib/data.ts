@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { supabase } from './supabase'
 import { useSession } from './session'
@@ -54,6 +55,7 @@ export type AssetEntry = {
 
 export type Person = {
   fullName: string
+  extraNote?: string
   nickName?: string
   roleTitle?: string
   badge?: string
@@ -97,38 +99,123 @@ async function rows<T>(query: PromiseLike<{ data: T[] | null; error: unknown }>)
 
 // ---------------- الجداول ----------------
 
-export function usePersonal() {
-  const { user } = useSession()
+// الجلب كما في التطبيق (fetchAll): بلا شرط user_id، فتعيد سياسات RLS ما
+// يملكه المستخدم وما شاركه معه غيره (عهدة أو دين أُسند إليه، التزام مشترك
+// دُعي إليه). ثم تُطبَّق قواعد التطبيق على ما يظهر.
+
+const ENTRY_COLUMNS = 'id, category, entry_type, title, amount, due_date, status, details, attachment_url, created_at, updated_at'
+export const ARCHIVED = 'مؤرشف'
+
+/** ‏قائمة أرقام FND محفوظة نصًا في details (SharedMemberState.ids). */
+function idsIn(details: Record<string, unknown> | undefined, key: string): string[] {
+  const raw = details?.[key]
+  let list: unknown = raw
+  if (typeof raw === 'string') {
+    try {
+      list = JSON.parse(raw || '[]')
+    } catch {
+      return []
+    }
+  }
+  return Array.isArray(list) ? list.map((v) => String(v).trim()).filter(Boolean) : []
+}
+
+/** رقمي في قائمة [key]؟ (SharedMemberState.hasMine) */
+export function hasMine(details: Record<string, unknown> | undefined, key: string, fnd: string): boolean {
+  return !!fnd && idsIn(details, key).includes(fnd)
+}
+
+/** دوري في العهدة أو الدين (CustodyAssignment.roleFor). */
+export function custodyRole(details: Record<string, unknown> | undefined, fnd: string) {
+  const d = (k: string) => String(details?.[k] ?? '').trim()
+  const owner = d('عهدة_مالك_المعرّف')
+  const holder = d('عهدة_مسندة_إلى')
+  const state = d('عهدة_حالة_الإسناد')
+  const assigned = !!holder && (state === 'بانتظار القبول' || state === 'مقبولة')
+  const accepted = state === 'مقبولة'
+  let role: 'soleOwner' | 'owner' | 'holder' | 'observer'
+  if (!assigned) role = owner && owner !== fnd ? 'observer' : 'soleOwner'
+  else if (owner && owner === fnd) role = 'owner'
+  else if (holder && holder === fnd) role = 'holder'
+  else if (!owner && holder !== fnd) role = 'soleOwner'
+  else role = 'observer'
+  return { role, accepted }
+}
+
+/** عهدة أو دين لا يخصني، أو أُسند إليّ ولم أقبله بعد: لا يظهر ولا يُحسب. */
+function personalVisible(e: Entry, fnd: string): boolean {
+  if (e.entry_type !== 'عهدة مالية' && e.entry_type !== 'دين / قرض / سلفة') return true
+  const { role, accepted } = custodyRole(e.details, fnd)
+  return !(role === 'observer' || (role === 'holder' && !accepted))
+}
+
+/** حالة دعوتي في التزام مشترك (قبول الأعضاء): رفضتها أو أُلغيت = لست مشاركًا. */
+export function myInviteState(details: Record<string, unknown> | undefined, fnd: string): string {
+  const raw = details?.['قبول الأعضاء']
+  let map: unknown = raw
+  if (typeof raw === 'string') {
+    try {
+      map = JSON.parse(raw || '{}')
+    } catch {
+      return ''
+    }
+  }
+  const mine = map && typeof map === 'object' ? (map as Record<string, { state?: string }>)[fnd] : undefined
+  return String(mine?.state ?? '')
+}
+
+/** كل السجلات الشخصية الظاهرة لي (ومنها المؤرشف). */
+export function usePersonalAll() {
+  const { user, profile } = useSession()
+  const fnd = profile?.fnd_id ?? ''
   return useQuery({
-    queryKey: ['personal', user?.id],
+    queryKey: ['personal', user?.id, fnd],
     enabled: !!user,
     staleTime: STALE,
     queryFn: () =>
-      rows<Entry>(
-        supabase
-          .from('personal_entries')
-          .select('id, category, entry_type, title, amount, due_date, status, details, attachment_url, created_at, updated_at')
-          .eq('user_id', user!.id)
-          .order('created_at', { ascending: false }),
-      ).then(live),
+      rows<Entry>(supabase.from('personal_entries').select(ENTRY_COLUMNS).order('created_at', { ascending: false })).then(
+        (list) => live(list).filter((e) => personalVisible(e, fnd)),
+      ),
   })
 }
 
-export function useShared() {
-  const { user } = useSession()
+/** «أنا»: بلا المؤرشف (مكانه الأرشيف). */
+export function usePersonal() {
+  const q = usePersonalAll()
+  const data = useMemo(() => q.data?.filter((e) => e.status !== ARCHIVED), [q.data])
+  return { ...q, data }
+}
+
+/** كل الالتزامات المشتركة الظاهرة لي: بلا ما حذفته من عندي أو رفضت دعوته. */
+export function useSharedAll() {
+  const { user, profile } = useSession()
+  const fnd = profile?.fnd_id ?? ''
   return useQuery({
-    queryKey: ['shared', user?.id],
+    queryKey: ['shared', user?.id, fnd],
     enabled: !!user,
     staleTime: STALE,
     queryFn: () =>
-      rows<Entry>(
-        supabase
-          .from('shared_entries')
-          .select('id, category, entry_type, title, amount, due_date, status, details, attachment_url, created_at, updated_at')
-          .eq('user_id', user!.id)
-          .order('created_at', { ascending: false }),
-      ).then(live),
+      rows<Entry>(supabase.from('shared_entries').select(ENTRY_COLUMNS).order('created_at', { ascending: false })).then(
+        (list) =>
+          live(list).filter(
+            (e) => !hasMine(e.details, 'محذوف عند', fnd) && !['rejected', 'cancelled'].includes(myInviteState(e.details, fnd)),
+          ),
+      ),
   })
+}
+
+/** مؤرشف عندي أو حالته مؤرشف. */
+export function sharedArchived(e: Entry, fnd: string) {
+  return (e.status ?? '').includes(ARCHIVED) || hasMine(e.details, 'مؤرشف عند', fnd)
+}
+
+/** الالتزامات المشتركة: بلا المؤرشف. */
+export function useShared() {
+  const { profile } = useSession()
+  const q = useSharedAll()
+  const fnd = profile?.fnd_id ?? ''
+  const data = useMemo(() => q.data?.filter((e) => !sharedArchived(e, fnd)), [q.data, fnd])
+  return { ...q, data }
 }
 
 export function useAssets() {
@@ -161,6 +248,95 @@ export function useAssetEntries() {
           .order('created_at', { ascending: false }),
       ),
   })
+}
+
+export type UnitContract = {
+  id: string
+  asset_id: string
+  unit_key: string
+  unit_name: string | null
+  tenant_name: string | null
+  lease_type: string
+  annual_rent: number
+  payment_cycle: string
+  start_date: string | null
+  end_date: string | null
+  status: string
+  notes: string | null
+}
+
+export type UnitPayment = {
+  id: string
+  contract_id: string
+  due_date: string | null
+  amount_due: number
+  amount_paid: number
+  paid_at: string | null
+  status: string
+  reference_no: string | null
+  notes: string | null
+}
+
+/** عقود الوحدات (property_unit_contracts) — عقودي كما في fetchAllUnitContracts. */
+export function useUnitContracts() {
+  const { user } = useSession()
+  return useQuery({
+    queryKey: ['unit-contracts', user?.id],
+    enabled: !!user,
+    staleTime: STALE,
+    queryFn: () =>
+      rows<UnitContract>(
+        supabase.from('property_unit_contracts').select('*').eq('user_id', user!.id).order('created_at', { ascending: false }),
+      ),
+  })
+}
+
+/** دفعات العقود (property_unit_payments). */
+export function useUnitPayments() {
+  const { user } = useSession()
+  return useQuery({
+    queryKey: ['unit-payments', user?.id],
+    enabled: !!user,
+    staleTime: STALE,
+    queryFn: () =>
+      rows<UnitPayment>(supabase.from('property_unit_payments').select('*').eq('user_id', user!.id).order('due_date', { ascending: true })),
+  })
+}
+
+export type Delegation = {
+  id: string
+  delegate_name: string
+  delegate_ref: string | null
+  scope: string
+  start_date: string | null
+  end_date: string | null
+  is_paused: boolean
+}
+
+/** التفويضات (delegations) — لانتهائها في الكلندر. */
+export function useDelegations() {
+  const { user } = useSession()
+  return useQuery({
+    queryKey: ['delegations', user?.id],
+    enabled: !!user,
+    staleTime: STALE,
+    queryFn: () =>
+      rows<Delegation>(
+        supabase.from('delegations').select('id, delegate_name, delegate_ref, scope, start_date, end_date, is_paused').eq('user_id', user!.id),
+      ).catch(() => [] as Delegation[]),
+  })
+}
+
+/** وحدات الأصل (units_json). */
+export function assetUnits(asset: Asset): Record<string, unknown>[] {
+  const raw = (asset as Asset & { units_json?: string | null }).units_json
+  if (!raw) return []
+  try {
+    const list = JSON.parse(String(raw))
+    return Array.isArray(list) ? list.filter((u) => u && typeof u === 'object') : []
+  } catch {
+    return []
+  }
 }
 
 /** البيانات الرسمية للأصل من سطر «##meta##» في logs_json (DocumentsHub._metaOf). */
@@ -327,13 +503,29 @@ function jsonList(value: unknown): unknown[] {
   return []
 }
 
-/** الأفراد والجهات: نفس مفتاح التطبيق people_management_records_v1. */
-export function usePeople() {
+/** الأفراد والجهات: نفس مفتاح التطبيق people_management_records_v1، كل السجلات. */
+export function usePeopleAll() {
   const store = useStore()
-  const people = jsonList(store.data?.['people_management_records_v1']).filter(
-    (p): p is Person => !!p && typeof p === 'object' && String((p as Person).fullName ?? '').trim() !== '',
+  const data = useMemo(
+    () =>
+      store.isSuccess
+        ? jsonList(store.data?.['people_management_records_v1']).filter(
+            (p): p is Person => !!p && typeof p === 'object' && String((p as Person).fullName ?? '').trim() !== '',
+          )
+        : undefined,
+    [store.isSuccess, store.data],
   )
-  return { ...store, data: store.isSuccess ? people : undefined }
+  return { ...store, data }
+}
+
+/** علامة الأرشفة في سجل الفرد (ArchiveCenter._archivedMark داخل extraNote). */
+export const personArchived = (p: Person) => String((p as Person & { extraNote?: string }).extraNote ?? '').includes('[مؤرشف]')
+
+/** الأفراد والجهات: بلا المؤرشف. */
+export function usePeople() {
+  const q = usePeopleAll()
+  const data = useMemo(() => q.data?.filter((p) => !personArchived(p)), [q.data])
+  return { ...q, data }
 }
 
 export type CalendarRecord = {
@@ -351,10 +543,31 @@ export type CalendarRecord = {
 /** بنود «الكلندر الذكي» التي أضافها المستخدم (smart_calendar_records_v1). */
 export function useCalendarRecords() {
   const store = useStore()
-  const list = jsonList(store.data?.['smart_calendar_records_v1']).filter(
-    (r): r is CalendarRecord => !!r && typeof r === 'object' && !!(r as CalendarRecord).date,
+  const data = useMemo(
+    () =>
+      store.isSuccess
+        ? jsonList(store.data?.['smart_calendar_records_v1']).filter(
+            (r): r is CalendarRecord => !!r && typeof r === 'object' && !!(r as CalendarRecord).date,
+          )
+        : undefined,
+    [store.isSuccess, store.data],
   )
-  return { ...store, data: store.isSuccess ? list : undefined }
+  return { ...store, data }
+}
+
+export type SavedReminder = { id: string; title: string; module: string; expiryDate: string; remindBeforeDays?: number }
+
+/** تذكيرات الانتهاء المحفوظة (AppRemindersStore ← app_expiry_reminders_v1). */
+export function useSavedReminders() {
+  const store = useStore()
+  const data = useMemo(
+    () =>
+      store.isSuccess
+        ? (jsonList(store.data?.['app_expiry_reminders_v1']) as SavedReminder[]).filter((r) => r && r.id && r.title)
+        : undefined,
+    [store.isSuccess, store.data],
+  )
+  return { ...store, data }
 }
 
 /** العملة الافتراضية للمستخدم (settings_currency)، كما يعرضها التطبيق. */

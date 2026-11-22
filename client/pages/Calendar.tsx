@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useI18n } from '@/lib/i18n'
-import { COLORS, GROUP_DUE, GROUP_EXPIRY, GROUP_FOLLOW, LEGEND, colorOf, isOverdue, sameDay, useCalendar, type CalItem } from '@/lib/calendar'
+import { COLORS, GROUP_DUE, GROUP_EXPIRY, GROUP_FOLLOW, LEGEND, colorOf, groupOf, isOverdue, kindOf, sameDay, useCalendar, type CalItem } from '@/lib/calendar'
 import { cn, date } from '@/lib/format'
 import { Chevron, Chip, Empty, Loading, PageHeader, SectionTitle } from '@/components/ui'
 
@@ -27,7 +27,7 @@ export default function Calendar() {
   }, [month])
 
   const inMonth = items.filter((i) => i.date.getMonth() === month.getMonth() && i.date.getFullYear() === month.getFullYear())
-  const filtered = (list: CalItem[]) => (group ? list.filter((i) => (group === 'متأخر' ? isOverdue(i) : i.group === group)) : list)
+  const filtered = (list: CalItem[]) => (group ? list.filter((i) => (group === 'متأخر' ? isOverdue(i) : groupOf(i) === group)) : list)
   const dayItems = filtered(selected ? items.filter((i) => sameDay(i.date, selected)) : inMonth)
 
   const shift = (n: number) => setMonth(new Date(month.getFullYear(), month.getMonth() + n, 1))
@@ -105,7 +105,7 @@ export default function Calendar() {
             <div className="flex flex-wrap gap-2">
               <Chip active={!group} label="الكل" count={inMonth.length} onClick={() => setGroup(null)} />
               {[GROUP_FOLLOW, GROUP_EXPIRY, GROUP_DUE].map((g) => (
-                <Chip key={g} active={group === g} label={g} count={inMonth.filter((i) => i.group === g).length} onClick={() => setGroup(g)} />
+                <Chip key={g} active={group === g} label={g} count={inMonth.filter((i) => groupOf(i) === g).length} onClick={() => setGroup(g)} />
               ))}
               <Chip active={group === 'متأخر'} label="متأخر" count={items.filter(isOverdue).length} onClick={() => setGroup('متأخر')} />
             </div>
@@ -116,9 +116,9 @@ export default function Calendar() {
               <Empty icon={CalendarDays} text="لا توجد عناصر في هذا اليوم" />
             ) : (
               <div className="flex flex-col gap-2">
-                {dayItems.map((i) => (
+                {dayItems.map((i, n) => (
                   <button
-                    key={i.key}
+                    key={`${i.key}-${n}`}
                     type="button"
                     disabled={!i.to}
                     onClick={() => i.to && navigate(i.to)}
@@ -130,7 +130,7 @@ export default function Calendar() {
                         {i.title}
                       </p>
                       <p className="text-[11px] text-sub">
-                        {t(i.kind)} · {t(i.module)}
+                        {t(kindOf(i) || 'موعد')} · {t(i.module)}
                         {!selected && ` · ${date(i.date)}`}
                         {i.time ? ` · ${i.time}` : ''}
                         {isOverdue(i) && <span className="font-bold" style={{ color: COLORS.overdue }}> · {t('متأخر')}</span>}

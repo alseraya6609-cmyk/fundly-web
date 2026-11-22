@@ -77,9 +77,9 @@ export function personalGroup(entryType: string, dbCategory?: string): string {
 }
 
 /** أنواع مالية تدخل في الملخص: الدخل والمصروف والديون. */
-export const INCOME_TYPES = ['إيراد']
+export const INCOME_TYPES = ['إيراد', 'دخل']
 export const EXPENSE_TYPES = ['المصروفات الشخصية', 'مصروف', 'قسط', 'غرامة']
-export const DEBT_TYPES = ['دين / قرض / سلفة']
+export const DEBT_TYPES = ['دين / قرض / سلفة', 'ديون']
 
 // shared_entries.entry_type — «جمعية مالية» تُعرض «تحديد أدوار» كما في التطبيق.
 export const SHARED_GROUPS: { key: string; label: string; icon: LucideIcon }[] = [

@@ -2,16 +2,21 @@ import { Link } from 'react-router-dom'
 import { Building2, HandCoins, LayoutDashboard, TrendingDown, TrendingUp, UserRound, Users, UsersRound, type LucideIcon } from 'lucide-react'
 import { useI18n } from '@/lib/i18n'
 import { moduleHidden, useSession } from '@/lib/session'
-import { currencyOf, useAssets, useCurrency, usePeople, usePersonal, useShared, type Entry } from '@/lib/data'
+import { currencyOf, useAssets, useCurrency, usePeople, usePersonal, usePersonalAll, useShared, type Entry } from '@/lib/data'
 import { DEBT_TYPES, EXPENSE_TYPES, INCOME_TYPES, MODULE_COLORS } from '@/lib/catalog'
 import { money } from '@/lib/format'
 import { Chevron, IconBadge, Loading, PageHeader, SectionTitle } from '@/components/ui'
 
 /** مجموع المبالغ لكل عملة على حدة — لا تُجمع عملتان مختلفتان. */
-function totals(entries: Entry[], types: string[], fallback: string): [string, number][] {
+// كما في HomeDashboardService: الملغى بلا مبلغ، والدين المغلق لا يُحسب.
+const CLOSED = new Set(['مكتملة', 'مكتمل', 'مؤرشف', 'ملغاة', 'ملغى', 'محذوف', 'تمت التسوية', 'مسددة'])
+
+function totals(entries: Entry[], types: string[], fallback: string, openOnly = false): [string, number][] {
   const map = new Map<string, number>()
   for (const e of entries) {
     if (!types.includes(e.entry_type)) continue
+    if (e.status === 'ملغاة' || e.status === 'ملغى') continue
+    if (openOnly && CLOSED.has(e.status)) continue
     const c = currencyOf(e.details, fallback)
     map.set(c, (map.get(c) ?? 0) + (Number(e.amount) || 0))
   }
@@ -28,12 +33,14 @@ export default function Summary() {
   const currency = useCurrency()
 
   const loading = personal.isLoading || shared.isLoading || assets.isLoading || people.isLoading
-  const entries = personal.data ?? []
+  // الإجماليات من كل السجلات كالتطبيق (ومنها المؤرشف)، والأعداد بلا المؤرشف.
+  const all = usePersonalAll()
+  const entries = all.data ?? []
 
   const money_cards: { title: string; icon: LucideIcon; color: string; rows: [string, number][] }[] = [
     { title: 'إجمالي الدخل', icon: TrendingUp, color: '#0A5A50', rows: totals(entries, INCOME_TYPES, currency) },
     { title: 'إجمالي المصروفات', icon: TrendingDown, color: '#C4392E', rows: totals(entries, EXPENSE_TYPES, currency) },
-    { title: 'إجمالي الديون', icon: HandCoins, color: '#A6691A', rows: totals(entries, DEBT_TYPES, currency) },
+    { title: 'إجمالي الديون', icon: HandCoins, color: '#A6691A', rows: totals(entries, DEBT_TYPES, currency, true) },
   ]
 
   const modules = [

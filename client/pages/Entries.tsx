@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { ClipboardList, LayoutGrid, UserRound, UsersRound, type LucideIcon } from 'lucide-react'
 import { useI18n } from '@/lib/i18n'
 import { moduleHidden, useSession } from '@/lib/session'
-import { currencyOf, useCommitmentExtras, useCurrency, usePersonal, useShared, type Entry } from '@/lib/data'
+import { currencyOf, custodyRole, useCommitmentExtras, useCurrency, usePersonal, useShared, type Entry } from '@/lib/data'
 import { MODULE_COLORS, PERSONAL_GROUPS, personalGroup, SHARED_GROUPS, sharedLabel } from '@/lib/catalog'
 import { date, matches, money } from '@/lib/format'
 import { Chip, Empty, ErrorBox, InfoRow, Loading, PageHeader, SearchField, SectionTitle, Sheet } from '@/components/ui'
@@ -75,7 +75,16 @@ function EntriesPage({
   adminTitle: (g: Group) => string
 }) {
   const { t } = useI18n()
-  const { hidden } = useSession()
+  const { hidden, profile } = useSession()
+  const fnd = profile?.fnd_id ?? ''
+  // سجل لم أنشئه: التزام مشترك دُعيت إليه، أو عهدة/دين أُسند إليّ.
+  const badgeOf = (e: Entry) => {
+    if (page === 'shared') {
+      const creator = String(e.details?.['معرف المنشئ'] ?? '').trim()
+      return creator && fnd && creator !== fnd ? 'مشترك معك' : undefined
+    }
+    return custodyRole(e.details, fnd).role === 'holder' ? 'مسندة إليك' : undefined
+  }
   const currency = useCurrency()
   const [params, setParams] = useSearchParams()
   const [filter, setFilter] = useState('all')
@@ -137,6 +146,7 @@ function EntriesPage({
                 type={t(typeLabel(e))}
                 amount={Number(e.amount) > 0 ? `${t('المبلغ')}: ${money(e.amount, t(currencyOf(e.details, currency)))}` : undefined}
                 meta={e.due_date ? `${t('التاريخ')}: ${date(e.due_date)}` : undefined}
+                badge={badgeOf(e)}
                 onClick={() => setParams({ open: e.id })}
               />
             )
