@@ -8,6 +8,8 @@ import {
   LEDGER_TYPES,
   SharedError,
   addContribution,
+  canDeleteExpense,
+  deleteSharedExpense,
   addRoscaPayment,
   decideLedgerItem,
   deleteRoscaPayment,
@@ -25,6 +27,7 @@ import { FileError, uploadDeviceFile } from '@/lib/files'
 import { Confirm } from './Confirm'
 import { Sheet } from './ui'
 import { MemberDatesActions } from './SharedLifecycle'
+import { RoscaMemberActions, SharedSimpleSections } from './SharedSections'
 import { useI18n } from '@/lib/i18n'
 import { useSession } from '@/lib/session'
 import { date, money } from '@/lib/format'
@@ -103,6 +106,9 @@ type LedgerActions = {
   manager: boolean
   addBudget?: () => void
   settle?: () => void
+  /** حذف مصروف: للمسؤول، وللعضو ما أرسله ولم يُعتمد. */
+  canDelete?: (e: { status: string; submittedBy: string }) => boolean
+  deleteExpense?: (id: string, label: string) => void
 }
 
 export function SharedDetails({
@@ -139,6 +145,7 @@ export function SharedDetails({
   const [deciding, setDeciding] = useState<{ kind: 'expense' | 'contribution'; id: string; label: string; approve: boolean } | null>(null)
   const [budgetOpen, setBudgetOpen] = useState(false)
   const [settleOpen, setSettleOpen] = useState(false)
+  const [removingExpense, setRemovingExpense] = useState<{ id: string; label: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -171,6 +178,11 @@ export function SharedDetails({
         manager,
         addBudget: isLumpSum(details) ? () => setBudgetOpen(true) : undefined,
         settle: () => setSettleOpen(true),
+        canDelete: (e) => canDeleteExpense(e, manager, myNames),
+        deleteExpense: (id, label) => {
+          setError('')
+          setRemovingExpense({ id, label })
+        },
       }
     : undefined
 
@@ -180,7 +192,13 @@ export function SharedDetails({
         <Block
           title="الأعضاء"
           count={list.length}
-          action={entry && !isCircle && LEDGER_TYPES.includes(entryType) ? <MemberDatesActions entry={entry} currency={currency} onChanged={(m) => onChanged?.(m)} /> : undefined}
+          action={
+            entry && isCircle ? (
+              <RoscaMemberActions entry={entry} onChanged={(m) => onChanged?.(m)} />
+            ) : entry && LEDGER_TYPES.includes(entryType) ? (
+              <MemberDatesActions entry={entry} currency={currency} onChanged={(m) => onChanged?.(m)} />
+            ) : undefined
+          }
         >
           {list.map((m, i) => {
             const id = fndIn(m.name)
@@ -247,6 +265,32 @@ export function SharedDetails({
         onConfirm={runDecision}
         onCancel={() => setDeciding(null)}
       />
+      <Confirm
+        open={!!removingExpense}
+        title="حذف المصروف"
+        message={`«${removingExpense?.label ?? ''}» — ${t('سيُحذف وتتغيّر الأرصدة تبعًا له. هل تريد الحذف؟')}`}
+        confirmLabel="حذف"
+        danger
+        busy={busy}
+        error={error}
+        onConfirm={async () => {
+          if (!entry || !removingExpense) return
+          setBusy(true)
+          setError('')
+          try {
+            await deleteSharedExpense(entry, removingExpense.id, fnd, myNames)
+            await qc.invalidateQueries({ queryKey: ['shared'] })
+            setRemovingExpense(null)
+            onChanged?.('تم حذف المصروف')
+          } catch (e) {
+            setError(e instanceof SharedError ? e.message : errorText(e) || 'تعذّر الحفظ. حاول مرة أخرى.')
+          } finally {
+            setBusy(false)
+          }
+        }}
+        onCancel={() => setRemovingExpense(null)}
+      />
+      {entry && <SharedSimpleSections entry={entry} onChanged={(m) => onChanged?.(m)} />}
       {entry && budgetOpen && (
         <BudgetForm
           entry={entry}
@@ -1218,6 +1262,16 @@ function LedgerView({
                   onApprove={() => onDecide('expense', e.id, e.description || t('مصروف'), true)}
                   onReject={() => onDecide('expense', e.id, e.description || t('مصروف'), false)}
                 />
+              )}
+              {actions?.deleteExpense && actions.canDelete?.(e) && (
+                <button
+                  type="button"
+                  onClick={() => actions.deleteExpense?.(e.id, e.description || t('مصروف'))}
+                  className="mt-1 flex items-center gap-1 text-[11.5px] font-extrabold text-danger"
+                >
+                  <Trash2 className="size-3.5" />
+                  {t('حذف المصروف')}
+                </button>
               )}
             </div>
           ))}

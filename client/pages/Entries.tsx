@@ -400,7 +400,7 @@ function EntryDetails({
     .filter(([, value]) => String(value).trim() !== '' && !/^[[{]/.test(String(value).trim()))
     .slice(0, 40)
   // دفتر المشتركة (المصروفات والمساهمات والتسويات) يُعرض في SharedDetails.
-  const ledgerKeys = page === 'shared' ? ['سجل المصروفات المشتركة', 'سجل المساهمات', 'سجل التسويات'] : []
+  const ledgerKeys = page === 'shared' ? ['سجل المصروفات المشتركة', 'سجل المساهمات', 'سجل التسويات', 'مستندات'] : []
   const logs = LOGS.filter((key) => !ledgerKeys.includes(key))
     .map((key) => [key, parseRows(entry.details?.[key])] as const)
     .filter(([, rows]) => rows.length > 0)
@@ -750,7 +750,7 @@ function EntryDetails({
               : entry.user_id && user?.id && entry.user_id !== user.id
                 ? 'بيانات هذا الالتزام يعدّلها صاحبه.'
                 : 'هذا النوع يُعدَّل من التطبيق حاليًا.'
-            : 'تعديل المصروفات وحذفها، وأعضاء تحديد الأدوار، ومشاركة الالتزام PDF من التطبيق حاليًا.',
+            : 'مشاركة الالتزام PDF وتحديد موقعك الحالي للمكان من التطبيق حاليًا.',
         )}
       </p>
     </div>

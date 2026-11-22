@@ -844,3 +844,193 @@ export async function purgeIfRemovedByAll(entry: Entry): Promise<boolean> {
   const { data } = await supabase.from('shared_entries').delete().eq('id', entry.id).select('id')
   return !!data && data.length > 0
 }
+
+// ---------------- حذف مصروف (_deleteExpense) ----------------
+
+/** المسؤول يحذف أي مصروف؛ والعضو ما أرسله ولم يُعتمد بعد. */
+export function canDeleteExpense(e: { status: string; submittedBy: string }, manager: boolean, myNames: string[]): boolean {
+  if (manager) return true
+  const by = (e.submittedBy ?? '').trim()
+  return e.status !== 'معتمد' && !!by && myNames.includes(by)
+}
+
+export async function deleteSharedExpense(entry: Entry, id: string, me: string, myNames: string[]) {
+  await mutateShared(entry, (details) => {
+    let list: unknown[] = []
+    try {
+      const raw = JSON.parse(details[EXPENSES_KEY] || '[]')
+      if (!Array.isArray(raw)) throw new Error()
+      list = raw
+    } catch {
+      throw new SharedError('تعذّرت قراءة السجل — نفّذ ذلك من التطبيق')
+    }
+    const row = list.find((x) => x && typeof x === 'object' && String((x as Record<string, unknown>).id ?? '') === id) as Record<string, unknown> | undefined
+    if (!row) throw new SharedError('لم يعد هذا المصروف موجودًا')
+    const manager = iAmManager(details, me, myNames)
+    if (!canDeleteExpense({ status: String(row.status ?? 'معتمد'), submittedBy: String(row.submittedBy ?? '') }, manager, myNames))
+      throw new SharedError('حذف المصروف المعتمد للمسؤول وحده')
+    return { [EXPENSES_KEY]: JSON.stringify(list.filter((x) => x !== row)) }
+  })
+}
+
+// ---------------- أعضاء تحديد الأدوار (_openAddMemberSheet / _removeRoscaMember) ----------------
+
+const MEMBERS_TEXT_KEY = 'الأعضاء / المشتركين'
+
+export async function roscaAddMember(entry: Entry, name: string, me: string, myNames: string[]) {
+  const clean = name.trim()
+  if (!clean) return
+  await mutateRosca(entry, (details) => {
+    if (!iAmManager(details, me, myNames)) throw new SharedError('هذا الإجراء للمسؤول وحده')
+    const list = membersOf(details)
+    if (list.some((m) => m.name.trim() === clean)) throw new SharedError(`${withoutFnd(clean)} موجود في الأعضاء`)
+    const names = (details[MEMBERS_TEXT_KEY] ?? '')
+      .split('،')
+      .map((x) => x.trim())
+      .filter(Boolean)
+    names.push(clean)
+    const changed: Record<string, string> = {
+      الأعضاء: JSON.stringify([...list.map((m) => ({ name: m.name, role: m.role })), { name: clean, role: 'عضو' }]),
+      [MEMBERS_TEXT_KEY]: names.join('، '),
+    }
+    const stamped = stampInvites({ ...details, ...changed })
+    if (stamped['وقت دعوة الأعضاء'] !== details['وقت دعوة الأعضاء']) changed['وقت دعوة الأعضاء'] = stamped['وقت دعوة الأعضاء']
+    return changed
+  })
+}
+
+/** من يمكن إلغاؤه: غير المسؤول. */
+export const roscaRemovable = (details: Record<string, unknown>) =>
+  membersOf(details)
+    .filter((m) => m.role !== 'مسؤول' && m.name.trim())
+    .map((m) => m.name.trim())
+
+/** لا يُلغى من سجّل دفعات أو استلم دوره. */
+export function roscaRemoveBlocked(details: Record<string, unknown>, name: string): boolean {
+  const plan = roscaPlan(details, memberNames(details))
+  const paid = plan.cycles.reduce((s, c) => s + paidBy(c, name), 0)
+  return paid > 0.01 || plan.cycles.some((c) => c.receiver === name && c.payoutDate.trim() !== '')
+}
+
+export const roscaTurnOf = (details: Record<string, unknown>, name: string) => roscaPlan(details, memberNames(details)).cycles.find((c) => c.receiver === name)?.index ?? null
+
+export async function roscaRemoveMember(entry: Entry, name: string, me: string, myNames: string[]) {
+  await mutateRosca(entry, (details) => {
+    if (!iAmManager(details, me, myNames)) throw new SharedError('هذا الإجراء للمسؤول وحده')
+    if (!roscaRemovable(details).includes(name)) throw new SharedError('لم يعد هذا العضو في الجمعية')
+    if (roscaRemoveBlocked(details, name)) throw new SharedError('لا يمكن إلغاء عضو سجّل دفعات أو استلم دوره')
+    const plan = roscaPlan(details, memberNames(details))
+    const list = membersOf(details).filter((m) => m.name.trim() !== name)
+    const names = (details[MEMBERS_TEXT_KEY] ?? '')
+      .split('،')
+      .map((x) => x.trim())
+      .filter((x) => x && x !== name)
+    // دورة كان صاحبها: يعود لترتيب الأعضاء الافتراضي.
+    const changed: Record<string, string> = {
+      الأعضاء: JSON.stringify(list.map((m) => ({ name: m.name, role: m.role }))),
+      [MEMBERS_TEXT_KEY]: names.join('، '),
+    }
+    if (plan.cycles.some((c) => c.receiver === name)) {
+      const data = cyclesOf(details)
+      for (const c of plan.cycles) {
+        if (c.receiver !== name) continue
+        const here = cycleAt(data, c.index)
+        here.receiver = ''
+        data[String(c.index)] = here
+      }
+      changed[CYCLES_KEY] = JSON.stringify(data)
+    }
+    return changed
+  })
+}
+
+// ---------------- المتابعة والتخطيط، المستندات، المواقع والأماكن (_SimpleEntry) ----------------
+
+export const FOLLOW_KEY_SHARED = 'متابعة وتخطيط'
+export const DOCS_KEY_SHARED = 'مستندات'
+export const PLACES_KEY_SHARED = 'مواقع وأماكن'
+export const SHARED_FOLLOW_KINDS = ['مهمة', 'موعد', 'عادة', 'تذكير', 'ملاحظات']
+export const DOC_BY_KEY = '__by'
+
+export type SimpleEntry = { kind: string; title: string; note: string; date: string; extra: Record<string, string> }
+
+export function simpleEntries(details: Record<string, unknown>, key: string): SimpleEntry[] {
+  const raw = details[key]
+  let list: unknown = raw
+  if (typeof raw === 'string') {
+    if (!raw.trim()) return []
+    try {
+      list = JSON.parse(raw)
+    } catch {
+      return []
+    }
+  }
+  if (!Array.isArray(list)) return []
+  return list
+    .filter((x) => x && typeof x === 'object' && !Array.isArray(x))
+    .map((x) => {
+      const m = x as Record<string, unknown>
+      const extra = m.extra && typeof m.extra === 'object' && !Array.isArray(m.extra) ? Object.fromEntries(Object.entries(m.extra as Record<string, unknown>).map(([k, v]) => [k, String(v)])) : {}
+      return { kind: String(m.kind ?? ''), title: String(m.title ?? ''), note: String(m.note ?? ''), date: String(m.date ?? ''), extra }
+    })
+}
+
+const simpleJson = (e: SimpleEntry) => {
+  const row: Record<string, unknown> = { kind: e.kind, title: e.title, note: e.note, date: e.date }
+  if (Object.keys(e.extra).length) row.extra = e.extra
+  return row
+}
+
+function storedSimple(details: Record<string, string>, key: string): SimpleEntry[] {
+  const raw = (details[key] ?? '').trim()
+  if (raw) {
+    try {
+      if (!Array.isArray(JSON.parse(raw))) throw new Error()
+    } catch {
+      throw new SharedError('تعذّرت قراءة السجل — نفّذ ذلك من التطبيق')
+    }
+  }
+  return simpleEntries(details, key)
+}
+
+const same = (a: SimpleEntry, b: SimpleEntry) => a.kind === b.kind && a.title === b.title && a.date === b.date
+
+/** إضافة عنصر، أو تعديله (يحتفظ بحالة الاكتمال) — [at] موضعه و[was] ما عُرض. */
+export async function saveSimpleEntry(entry: Entry, key: string, item: SimpleEntry, edit?: { at: number; was: SimpleEntry }) {
+  await mutateShared(entry, (details) => {
+    const list = storedSimple(details, key)
+    if (edit) {
+      const old = list[edit.at]
+      if (!old || !same(old, edit.was)) throw new SharedError('تغيّرت البيانات أثناء الحفظ — أعد المحاولة')
+      const status = old.extra['الحالة'] ?? ''
+      const by = old.extra[DOC_BY_KEY] ?? ''
+      list[edit.at] = { ...item, extra: { ...item.extra, ...(by ? { [DOC_BY_KEY]: by } : {}), ...(status ? { الحالة: status } : {}) } }
+    } else list.push(item)
+    return { [key]: JSON.stringify(list.map(simpleJson)) }
+  })
+}
+
+export async function toggleSimpleDone(entry: Entry, key: string, at: number, was: SimpleEntry, tr: (s: string) => string) {
+  await mutateShared(entry, (details) => {
+    const list = storedSimple(details, key)
+    const e = list[at]
+    if (!e || !same(e, was)) throw new SharedError('تغيّرت البيانات أثناء الحفظ — أعد المحاولة')
+    const done = (e.extra['الحالة'] ?? '') === 'مكتملة'
+    const extra = { ...e.extra }
+    if (done) delete extra['الحالة']
+    else extra['الحالة'] = 'مكتملة'
+    list[at] = { ...e, extra }
+    const text = `${tr(done ? 'إلغاء اكتمال' : 'اكتمال')} ${tr(e.kind)}: ${e.title}`
+    return { [key]: JSON.stringify(list.map(simpleJson)), [EVENTS_KEY]: withEvent(details, text) }
+  })
+}
+
+export async function deleteSimpleEntry(entry: Entry, key: string, at: number, was: SimpleEntry, tr: (s: string) => string) {
+  await mutateShared(entry, (details) => {
+    const list = storedSimple(details, key)
+    const e = list[at]
+    if (!e || !same(e, was)) throw new SharedError('تغيّرت البيانات أثناء الحفظ — أعد المحاولة')
+    list.splice(at, 1)
+    return { [key]: JSON.stringify(list.map(simpleJson)), [EVENTS_KEY]: withEvent(details, `${tr('حذف')} ${tr(e.kind)}: ${e.title}`) }
+  })
+}
