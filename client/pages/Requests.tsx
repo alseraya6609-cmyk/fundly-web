@@ -1,6 +1,7 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { Check, CheckCircle2, ChevronDown, Inbox, Megaphone, Smartphone, UserRound, X } from 'lucide-react'
+import { Check, CheckCircle2, ChevronDown, Inbox, Megaphone, ReceiptText, Smartphone, UserRound, X } from 'lucide-react'
 import { useI18n } from '@/lib/i18n'
 import { useSession } from '@/lib/session'
 import { inboxText, useInbox, useStore, type InboxItem } from '@/lib/data'
@@ -117,7 +118,13 @@ function RequestCard({ item, onDone }: { item: InboxItem; onDone: (message: stri
             )}
           </>
         )}
-        {!respondable && !info && (
+        {item.source === 'salary_receipts' && item.record_id && (
+          <Link to={`/salary?open=${item.record_id}`} className="flex h-10 items-center gap-1.5 rounded-inner bg-brand px-4 text-[13px] font-extrabold text-white hover:bg-brand-dark">
+            <ReceiptText className="size-4" />
+            {t('فتح السند')}
+          </Link>
+        )}
+        {!respondable && !info && item.source !== 'salary_receipts' && (
           <p className="flex items-center gap-1.5 text-[12px] font-bold text-sub">
             <Smartphone className="size-4" />
             {t('يُرد على هذا الطلب من التطبيق.')}

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { Archive, Building, CheckCircle2, LayoutGrid, Pencil, Plus, Trash2, UserRound, Users } from 'lucide-react'
+import { Archive, Building, CheckCircle2, LayoutGrid, Pencil, Plus, ReceiptText, Trash2, UserRound, Users } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useI18n } from '@/lib/i18n'
 import { moduleHidden, useSession } from '@/lib/session'
@@ -282,8 +282,17 @@ export default function People() {
                 </div>
               )
             })()}
+            {!String(open.typeKey ?? '').startsWith('entity_') && (
+              <Link
+                to={`/salary?${new URLSearchParams({ ...(String(open.details?.['الرقم التعريفي'] ?? '').trim() ? { fnd: String(open.details?.['الرقم التعريفي']).trim() } : {}), name: open.fullName.trim() }).toString()}`}
+                className="mt-4 flex h-11 items-center justify-center gap-1.5 rounded-inner border border-brand text-[13px] font-extrabold text-brand hover:bg-brand-soft"
+              >
+                <ReceiptText className="size-4" />
+                {t('سندات القبض والرواتب')}
+              </Link>
+            )}
             <p className="mt-5 rounded-inner bg-surface px-4 py-3 text-[12px] text-sub">
-              {t('سندات الرواتب والتفويض من التطبيق.')}
+              {t('التفويض من التطبيق.')}
             </p>
             <Confirm
               open={!!action}

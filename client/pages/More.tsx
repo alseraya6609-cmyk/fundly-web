@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Bell, CalendarDays, Check, Copy, Ellipsis, FileBarChart, FileText, Globe, LayoutDashboard, LifeBuoy, LogOut, ShieldCheck, Smartphone, UserRound } from 'lucide-react'
+import { Bell, CalendarDays, ReceiptText, Check, Copy, Ellipsis, FileBarChart, FileText, Globe, LayoutDashboard, LifeBuoy, LogOut, ShieldCheck, Smartphone, UserRound } from 'lucide-react'
 import { LANGS, useI18n, type Lang } from '@/lib/i18n'
 import { WEB_VERSION, useSession } from '@/lib/session'
 import { useStore } from '@/lib/data'
@@ -100,13 +100,14 @@ export default function More() {
         </div>
       </div>
 
-      <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
         {(
           [
             ['/calendar', 'الكلندر الذكي', CalendarDays],
             ['/requests', 'الطلبات', Bell],
             ['/summary', 'الملخص الشامل', LayoutDashboard],
             ['/reports', 'التقارير', FileBarChart],
+            ['/salary', 'سندات القبض والرواتب', ReceiptText],
           ] as const
         ).map(([to, label, Icon]) => (
           <Link key={to} to={to} className="card flex flex-col items-center gap-2 px-2 py-4 text-center hover:bg-line/70">

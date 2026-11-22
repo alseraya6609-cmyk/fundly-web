@@ -412,3 +412,62 @@ export async function deletePerson(person: Person): Promise<void> {
     return list.filter((_, i) => i !== index)
   })
 }
+
+/** PeopleDirectoryStore.upsert: يُضاف بالاسم إن لم يوجد، وإلا تُدمج تفاصيله ويُضاف التصنيف إضافيًا. */
+export async function upsertDirectoryPerson(o: { fullName: string; typeKey: string; categoryName: string; details?: Record<string, string>; roleTitle?: string; sourceNote?: string }) {
+  const name = o.fullName.trim()
+  if (!name) return
+  const norm = (v: string) => v.trim().replace(/\s+/g, ' ').toLowerCase()
+  const d = new Date()
+  const today = `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}`
+  const clean = Object.fromEntries(Object.entries(o.details ?? {}).filter(([, v]) => v.trim()).map(([k, v]) => [k, v.trim()]))
+  const note = (o.sourceNote ?? '').trim()
+  await mutate((list) => {
+    const i = list.findIndex((x) => norm(String(x.fullName ?? '')) === norm(name))
+    if (i === -1) {
+      list.push({
+        fullName: name,
+        nickName: '',
+        roleTitle: o.roleTitle ?? '',
+        badge: o.categoryName,
+        badgeColor: 0xff0a5a50,
+        statusNote: '',
+        extraNote: o.sourceNote ?? '',
+        typeKey: o.typeKey,
+        categoryName: o.categoryName,
+        additionalCategoryNames: [],
+        activityLog: note ? [`${today} · ${note}`] : [],
+        dueToYou: 0,
+        dueOnYou: 0,
+        openTasks: 0,
+        documentsCount: 0,
+        lastUpdate: today,
+        createdAt: today,
+        sharedCommitments: [],
+        documents: [],
+        details: clean,
+        isPinned: false,
+        isFrozen: false,
+      } as Item)
+      return list
+    }
+    const row = list[i] as Record<string, unknown>
+    const merged: Record<string, string> = {}
+    if (row.details && typeof row.details === 'object') for (const [k, v] of Object.entries(row.details as Record<string, unknown>)) merged[k] = String(v ?? '')
+    Object.assign(merged, clean)
+    row.details = merged
+    row.lastUpdate = today
+    if (String(row.categoryName ?? '') !== o.categoryName) {
+      const extras = Array.isArray(row.additionalCategoryNames) ? (row.additionalCategoryNames as unknown[]).map(String) : []
+      if (!extras.includes(o.categoryName)) extras.push(o.categoryName)
+      row.additionalCategoryNames = extras
+    }
+    if (note) {
+      const log = Array.isArray(row.activityLog) ? (row.activityLog as unknown[]).map(String) : []
+      log.push(`${today} · ${note}`)
+      row.activityLog = log
+    }
+    list[i] = row as Item
+    return list
+  })
+}
