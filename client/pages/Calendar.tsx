@@ -6,6 +6,27 @@ import { COLORS, GROUP_DUE, GROUP_EXPIRY, GROUP_FOLLOW, LEGEND, colorOf, groupOf
 import { cn, date } from '@/lib/format'
 import { Chevron, Chip, Empty, Loading, PageHeader, SectionTitle } from '@/components/ui'
 
+/** نص في سطر واحد يصغر ليتسع في عرضه بلا قطع (FittedBox scaleDown في التطبيق). */
+function FitText({ text }: { text: string }) {
+  const [scale, setScale] = useState(1)
+  const fit = (box: HTMLSpanElement | null) => {
+    if (!box) return
+    const inner = box.firstElementChild as HTMLElement | null
+    if (!inner) return
+    const room = box.clientWidth - 2
+    const need = inner.scrollWidth
+    const next = need > room && need > 0 ? room / need : 1
+    if (Math.abs(next - scale) > 0.01) setScale(next)
+  }
+  return (
+    <span ref={fit} className="flex justify-center overflow-hidden px-px py-1">
+      <span className="inline-block whitespace-nowrap" style={{ transform: `scale(${scale})`, transformOrigin: 'center' }}>
+        {text}
+      </span>
+    </span>
+  )
+}
+
 const MONTHS = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر']
 // الأسبوع يبدأ بالأحد كما في التطبيق.
 const DAYS = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت']
@@ -55,10 +76,9 @@ export default function Calendar() {
                 </button>
               </div>
               <div className="grid grid-cols-7 text-center text-[11px] font-bold text-sub">
+                {/* أسماء الأيام كاملة، تصغر لتتسع في عمودها بلا قطع (FittedBox scaleDown). */}
                 {DAYS.map((d) => (
-                  <span key={d} className="truncate py-1">
-                    {t(d)}
-                  </span>
+                  <FitText key={d} text={t(d)} />
                 ))}
               </div>
               <div className="grid grid-cols-7 gap-1">

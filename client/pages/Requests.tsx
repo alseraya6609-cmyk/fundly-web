@@ -210,7 +210,8 @@ export default function Requests() {
           {t(notice)}
         </p>
       )}
-      <div className="no-scrollbar -mx-4 mb-3 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0">
+      {/* التصنيفات الثلاثة ظاهرة كاملة: تلتف إلى سطر ثانٍ في الشاشة الضيقة. */}
+      <div className="mb-3 flex flex-wrap gap-2">
         <Chip active={filter === 'all'} label="الكل" icon={Inbox} count={allCount} onClick={() => setFilter('all')} />
         <Chip active={filter === 'mine'} label="بانتظار قبولي" icon={FileCheck2} count={mineCount} onClick={() => setFilter('mine')} />
         <Chip active={filter === 'others'} label="بانتظار قبول الآخرين" icon={Send} count={othersCount} onClick={() => setFilter('others')} />
