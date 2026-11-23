@@ -1,12 +1,23 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { useSearchParams } from 'react-router-dom'
-import { Archive, Ban, Building2, CheckCircle2, LayoutGrid, MoreVertical, Pencil, Plus, Snowflake, Trash2, UserCheck } from 'lucide-react'
+import { Link, useSearchParams } from 'react-router-dom'
+import { Archive, Ban, Building2, CheckCircle2, LayoutGrid, MoreVertical, Pencil, Plus, Snowflake, Trash2, UserCheck, UserCog, UserRoundCheck } from 'lucide-react'
 import { useI18n } from '@/lib/i18n'
 import { moduleHidden, useSession } from '@/lib/session'
 import { ARCHIVED, assetMeta, assetUnits, useCurrency, type Asset, type AssetEntry, type UnitContract, type UnitPayment } from '@/lib/data'
 import { DELEGATED_LABEL, canAdd, canDelete, canEdit, canPay, canWrite, delegatedOf, usePageAssets, usePageContracts, usePageEntries, usePagePayments, type DelegatedAsset } from '@/lib/delegatedAssets'
 import { DelegationCard } from '@/components/DelegatedAsset'
+import {
+  OUTGOING_LABEL,
+  incomingOwnerName,
+  incomingTargetsText,
+  outgoingBadge,
+  outgoingNote,
+  unitOutgoingBadge,
+  useOutgoingDelegations,
+  usePendingIncoming,
+  type Outgoing,
+} from '@/lib/outgoing'
 import { ASSET_GROUPS, MODULE_COLORS, assetGroup } from '@/lib/catalog'
 import { date, matches, money } from '@/lib/format'
 import { FileButton } from '@/components/FileButton'
@@ -62,14 +73,20 @@ export default function Assets() {
   const visible = (assets.data ?? []).filter((a) => a.status !== ARCHIVED && groups.some((g) => g.key === assetGroup(a.category)))
   // الفرع يظهر داخل نشاطه الرئيسي (قسم «الفروع») كالوحدة داخل عقارها.
   const all = visible.filter((a) => !isBranch(a))
+  // ما فوّضته أنا لغيري (وسم «فوّضت غيري بإدارته»)، وما وصلني ولم أقبله.
+  const isMineDelegated = useCallback((id: string) => !!delegatedOf(id), [])
+  const outgoing = useOutgoingDelegations(assets.data, isMineDelegated)
+  const outgoingCount = all.filter((a) => outgoing.has(a.id)).length
+  const pendingIncoming = usePendingIncoming()
   const list = useMemo(
     () =>
       all.filter(
         (a) =>
-          (filter === 'all' || (filter === DELEGATED_LABEL ? !!delegatedOf(a.id) : assetGroup(a.category) === filter)) &&
+          (filter === 'all' ||
+            (filter === DELEGATED_LABEL ? !!delegatedOf(a.id) : filter === OUTGOING_LABEL ? outgoing.has(a.id) : assetGroup(a.category) === filter)) &&
           matches(search, a.title, a.sub_type, a.location_or_type, a.owner, a.tenant),
       ),
-    [all, filter, search],
+    [all, filter, search, outgoing],
   )
   const open = visible.find((a) => a.id === params.get('open'))
   const openDelegation = open ? delegatedOf(open.id) : null
@@ -144,7 +161,27 @@ export default function Assets() {
           return <Chip key={g.key} active={filter === g.key} label={g.label} icon={g.icon} count={n} onClick={() => setFilter(g.key)} />
         })}
         {delegatedCount > 0 && <Chip active={filter === DELEGATED_LABEL} label={DELEGATED_LABEL} icon={UserCheck} count={delegatedCount} onClick={() => setFilter(DELEGATED_LABEL)} />}
+        {outgoingCount > 0 && <Chip active={filter === OUTGOING_LABEL} label={OUTGOING_LABEL} icon={UserCog} count={outgoingCount} onClick={() => setFilter(OUTGOING_LABEL)} />}
       </div>
+
+      {/* تفويض وصلني على عقار/نشاط/مركبة ولم أقبله بعد — يظهر ولو لم يكن عندي أصول. */}
+      {pendingIncoming.map((d) => (
+        <Link
+          key={d.id}
+          to={`/delegations?incoming=${d.id}`}
+          className="mt-3 flex items-start gap-3 rounded-inner bg-gold-soft px-4 py-3 hover:ring-1 hover:ring-gold"
+        >
+          <UserRoundCheck className="mt-0.5 size-5 shrink-0 text-gold-dark" />
+          <span className="min-w-0 flex-1">
+            <span dir="auto" className="block text-[13px] font-extrabold leading-relaxed text-title">
+              {t('فوّضك')} {incomingOwnerName(d) || t('صاحب التفويض')} {t('بإدارة')} {incomingTargetsText(d, t)}
+            </span>
+            <span className="mt-0.5 block text-[11.5px] font-bold leading-relaxed text-gold-dark">
+              {t('بانتظار قبولك — اضغط لعرض التفويض وقبوله، ثم يظهر هنا بوسم «مفوَّض أنا بإدارته»')}
+            </span>
+          </span>
+        </Link>
+      ))}
 
       <SectionTitle count={list.length}>{t('العناصر')}</SectionTitle>
       {assets.isLoading ? (
@@ -165,7 +202,14 @@ export default function Assets() {
                 title={a.title}
                 type={[t(a.sub_type), a.location_or_type].filter(Boolean).join(' · ')}
                 badge={a.status ? a.status : undefined}
-                meta={[delegatedOf(a.id) ? t(DELEGATED_LABEL) : '', a.end_date ? `${t('تاريخ الانتهاء')}: ${date(a.end_date)}` : ''].filter(Boolean).join(' · ') || undefined}
+                meta={
+                  [
+                    delegatedOf(a.id) ? t(DELEGATED_LABEL) : outgoingBadge(outgoing.get(a.id)) ? t(outgoingBadge(outgoing.get(a.id))!) : '',
+                    a.end_date ? `${t('تاريخ الانتهاء')}: ${date(a.end_date)}` : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' · ') || undefined
+                }
                 onClick={() => setParams({ open: a.id })}
               />
             )
@@ -220,6 +264,12 @@ export default function Assets() {
                   <InfoRow key={k} label={k} value={v} />
                 ))}
             </div>
+            {!openDelegation && outgoing.has(open.id) && (
+              <p className="mt-4 flex items-start gap-2 rounded-inner bg-brand-soft px-3 py-2.5 text-[12.5px] font-bold leading-relaxed text-brand">
+                <UserCog className="mt-0.5 size-4 shrink-0" />
+                <span dir="auto">{outgoingNote(outgoing.get(open.id), t)}</span>
+              </p>
+            )}
             {openDelegation && (
               <DelegationCard
                 asset={open}
@@ -231,7 +281,7 @@ export default function Assets() {
                 }}
               />
             )}
-            <AssetUnits asset={open} delegation={openDelegation} onEditUnit={(type, focusKey) => setEditing({ asset: open, type, focusKey })} onDone={flash} />
+            <AssetUnits asset={open} delegation={openDelegation} outgoing={outgoing.get(open.id)} onEditUnit={(type, focusKey) => setEditing({ asset: open, type, focusKey })} onDone={flash} />
             {assetGroup(open.category) === 'activity' && (
               <ActivityLeaseBox
                 asset={open}
@@ -655,7 +705,19 @@ function AssetRecord({ entry, onEdit, onDelete }: { entry: AssetEntry; onEdit?: 
   وحدات العقار الحية (units_json بلا المؤرشفة والمحذوفة)، وكل وحدة تُفتح
   بتفاصيلها وأوامرها، و«إضافة وحدة» و«المرافق العامة» كما في صفحة العقار.
 */
-function AssetUnits({ asset, delegation, onEditUnit, onDone }: { asset: Asset; delegation: DelegatedAsset | null; onEditUnit: (type: string, focusKey: string) => void; onDone: (m: string) => void }) {
+function AssetUnits({
+  asset,
+  delegation,
+  outgoing,
+  onEditUnit,
+  onDone,
+}: {
+  asset: Asset
+  delegation: DelegatedAsset | null
+  outgoing?: Outgoing[]
+  onEditUnit: (type: string, focusKey: string) => void
+  onDone: (m: string) => void
+}) {
   const { t } = useI18n()
   const units = decodeUnits(asset.units_json).filter(unitIsLive)
   const [unit, setUnit] = useState<PropertyUnit | null>(null)
@@ -698,6 +760,12 @@ function AssetUnits({ asset, delegation, onEditUnit, onDone }: { asset: Asset; d
                   <span className="truncate">{u.name || u.unitNumber || t('وحدة')}</span>
                 </p>
                 <p className="text-[11px] text-muted">{[u.type, u.status].filter(Boolean).map((x) => t(x)).join(' · ')}</p>
+                {/* _unitDelegationLabel: مفوَّض أنا، أو فوّضت هذه الوحدة لغيري. */}
+                {(delegation || unitOutgoingBadge(outgoing, u.unitNumber ?? '', u.name ?? '', i)) && (
+                  <p className="mt-0.5 text-[10.5px] font-extrabold text-mod-people">
+                    {t(delegation ? DELEGATED_LABEL : unitOutgoingBadge(outgoing, u.unitNumber ?? '', u.name ?? '', i)!)}
+                  </p>
+                )}
               </button>
             )
           })}

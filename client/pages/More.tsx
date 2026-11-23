@@ -111,6 +111,7 @@ export default function More() {
             ['/salary', 'سندات القبض والرواتب', ReceiptText],
             ['/delegations', 'التفويضات', ShieldCheck],
             ['/trash', 'سلة المهملات', Trash2],
+            ['/support', 'إرسال بلاغ أو اقتراح', LifeBuoy],
           ] as const
         ).map(([to, label, Icon]) => (
           <Link key={to} to={to} className="card flex flex-col items-center gap-2 px-2 py-4 text-center hover:bg-line/70">

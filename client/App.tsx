@@ -18,6 +18,7 @@ import Trash from '@/pages/Trash'
 import Reports from '@/pages/Reports'
 import Salary from '@/pages/Salary'
 import Delegations from '@/pages/Delegations'
+import Support from '@/pages/Support'
 import NotFound from '@/pages/NotFound'
 import { Maintenance, PolicyConsent, Splash, Suspended } from '@/pages/Gates'
 
@@ -66,6 +67,7 @@ export default function App() {
                 <Route path="requests" element={<Requests />} />
                 <Route path="salary" element={<Salary />} />
                 <Route path="delegations" element={<Delegations />} />
+                <Route path="support" element={<Support />} />
                 <Route path="more" element={<More />} />
                 <Route path="*" element={<NotFound />} />
               </Route>

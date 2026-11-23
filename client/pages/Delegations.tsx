@@ -108,6 +108,18 @@ export default function Delegations() {
     window.setTimeout(() => setNotice(''), 4000)
   }
 
+  // من صفحة الأصول: «فوّضك فلان… بانتظار قبولك» يفتح التفويض الوارد مباشرة.
+  useEffect(() => {
+    const id = params.get('incoming')
+    if (!id || !q.data) return
+    const d = q.data.find((x) => x.id === id)
+    if (d) {
+      setDirection('received')
+      setIncoming(d)
+    }
+    setParams({}, { replace: true })
+  }, [params, q.data, setParams])
+
   const all = q.data ?? []
   const source = all.filter((d) => (direction === 'received' ? isReceived(d, uid) : !isReceived(d, uid)))
   const counts: Record<string, number> = {

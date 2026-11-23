@@ -31,6 +31,7 @@ import {
   type SharedValues,
 } from '@/lib/sharedForm'
 import { Confirm } from './Confirm'
+import { FndCopy, fndIn } from './FndCopy'
 import { Sheet } from './ui'
 
 /*
@@ -55,21 +56,44 @@ const fromInputDate = (value: string) => {
 }
 const shown = (n: string) => withoutFnd(n) || n
 
-/** _pickSharedPerson: بالرقم التعريفي، أو من الأفراد، أو اسم جديد. */
-export function MemberPicker({ open, me, exclude, onPick, onClose }: { open: boolean; me: string; exclude: string[]; onPick: (name: string) => void; onClose: () => void }) {
+/**
+  _pickSharedPerson: بالرقم التعريفي، أو من الأفراد، أو اسم جديد.
+  رقمي أنا: الزر «إضافة» — يضيفني إن لم أكن في القائمة ([meEntry])، وإلا
+  رسالة أني مضاف (والمدير يُضاف مرة واحدة). ومن في القائمة لا يُضاف ثانية.
+*/
+export function MemberPicker({
+  open,
+  me,
+  exclude,
+  meEntry,
+  managerWord = 'مسؤولًا',
+  onPick,
+  onClose,
+}: {
+  open: boolean
+  me: string
+  exclude: string[]
+  meEntry?: string
+  managerWord?: string
+  onPick: (name: string) => void
+  onClose: () => void
+}) {
   const { t } = useI18n()
   const people = usePeople()
   const [fnd, setFnd] = useState('')
   const [found, setFound] = useState('')
   const [looking, setLooking] = useState(false)
   const [search, setSearch] = useState('')
+  const [stress, setStress] = useState('')
   useEffect(() => {
     if (!open) {
       setFnd('')
       setFound('')
       setSearch('')
+      setStress('')
     }
   }, [open])
+  useEffect(() => setStress(''), [fnd])
   useEffect(() => {
     const id = normalizeFnd(fnd)
     setFound('')
@@ -89,23 +113,52 @@ export function MemberPicker({ open, me, exclude, onPick, onClose }: { open: boo
   const q = search.trim()
   const list = names.filter((n) => n.includes(q) && !exclude.includes(n))
   const id = normalizeFnd(fnd)
+  const isSelf = isValidFnd(id) && !!me && id === me
+  const isMine = (e: string) => (!!meEntry && e.trim() === meEntry.trim()) || (!!me && fndIn(e) === me)
+  const selfIn = exclude.some(isMine)
+  const canAddSelf = isSelf && !selfIn && !!meEntry
+  const selfNote = !isSelf
+    ? ''
+    : canAddSelf
+      ? t('هذا رقمك التعريفي — اضغط «إضافة» لإضافة نفسك')
+      : selfIn && exclude.length && isMine(exclude[0])
+        ? `${t('هذا رقمك التعريفي — أنت مُضاف تلقائيًا')} ${t(managerWord)}${t('، ويُضاف كل شخص مرة واحدة فقط.')}`
+        : selfIn
+          ? t('هذا رقمك التعريفي — أنت مُضاف في القائمة، ويُضاف كل شخص مرة واحدة فقط.')
+          : t('هذا رقمك التعريفي — اكتب رقم الشخص الآخر')
+  const foundDup = !!found && exclude.some((e) => fndIn(e) === id)
   return (
     <Sheet open={open} onClose={onClose}>
       <p className="text-[17px] font-extrabold text-title">{t('اختيار شخص')}</p>
       <div className="mt-3 rounded-inner bg-field p-3">
         <p className="mb-1 text-[12px] font-bold text-sub">{t('الرقم التعريفي')}</p>
         <input dir="ltr" value={fnd} placeholder="FND-XXXX-XXXX" onChange={(e) => setFnd(e.target.value)} className={cn(inputClass, 'bg-white')} />
-        {id === me && isValidFnd(id) && <p className="mt-1 text-[11.5px] font-bold text-danger">{t('هذا رقمك أنت')}</p>}
-        {isValidFnd(id) && id !== me && !looking && !found && <p className="mt-1 text-[11.5px] text-muted">{t('لا يوجد حساب بهذا الرقم')}</p>}
-        {found && (
-          <button
-            type="button"
-            onClick={() => onPick(`${found} (${id})`)}
-            className="mt-2 flex h-11 w-full items-center justify-center gap-2 rounded-field bg-brand text-[13px] font-extrabold text-white hover:bg-brand-dark"
-          >
-            <BadgeCheck className="size-4" />
-            {found} ({id})
-          </button>
+        {isSelf && (
+          <>
+            <p className={cn('mt-2 rounded-inner px-3 py-2 text-[12px] font-bold leading-relaxed', stress ? 'bg-danger-soft text-danger' : 'bg-gold-soft text-gold-dark')}>{selfNote}</p>
+            <button
+              type="button"
+              onClick={() => (canAddSelf ? onPick(meEntry!) : setStress(selfNote))}
+              className="mt-2 flex h-11 w-full items-center justify-center gap-2 rounded-field bg-brand text-[13px] font-extrabold text-white hover:bg-brand-dark"
+            >
+              <Plus className="size-4" />
+              {t('إضافة')}
+            </button>
+          </>
+        )}
+        {isValidFnd(id) && !isSelf && !looking && !found && <p className="mt-1 text-[11.5px] text-muted">{t('لا يوجد حساب بهذا الرقم')}</p>}
+        {found && !isSelf && (
+          <>
+            {foundDup && stress && <p className="mt-2 rounded-inner bg-danger-soft px-3 py-2 text-[12px] font-bold text-danger">{stress}</p>}
+            <button
+              type="button"
+              onClick={() => (foundDup ? setStress(`${t('مُضاف مسبقًا في القائمة')}: ${found}`) : onPick(`${found} (${id})`))}
+              className="mt-2 flex h-11 w-full items-center justify-center gap-2 rounded-field bg-brand text-[13px] font-extrabold text-white hover:bg-brand-dark"
+            >
+              <BadgeCheck className="size-4" />
+              {found} ({id})
+            </button>
+          </>
         )}
       </div>
       <div className="relative mt-3">
@@ -336,6 +389,7 @@ function Body({ form, entry, onDone }: { form: SharedFormDef; entry?: Entry; onD
                 {shown(n)}
                 {n === v.manager && <span className="ms-1.5 rounded-full bg-gold-soft px-2 py-0.5 text-[10px] font-extrabold text-gold-dark">{t('المسؤول')}</span>}
               </span>
+              {fndIn(n) && <FndCopy fnd={fndIn(n)} />}
               {f.kind === 'team' && lump && (
                 <input
                   dir="ltr"
@@ -439,7 +493,15 @@ function Body({ form, entry, onDone }: { form: SharedFormDef; entry?: Entry; onD
       <button type="button" onClick={ask} className="mt-5 flex h-13 w-full items-center justify-center rounded-field bg-brand py-3.5 text-[15px] font-extrabold text-white hover:bg-brand-dark">
         {t(entry ? 'حفظ التعديل' : 'حفظ')}
       </button>
-      <MemberPicker open={picking} me={fnd} exclude={people} onPick={addPerson} onClose={() => setPicking(false)} />
+      <MemberPicker
+        open={picking}
+        me={fnd}
+        exclude={people}
+        meEntry={meEntry}
+        managerWord={/رحلة/.test(form.label) ? 'مديرًا للرحلة' : 'مسؤولًا'}
+        onPick={addPerson}
+        onClose={() => setPicking(false)}
+      />
       <Confirm
         open={confirming}
         title={entry ? 'تأكيد التعديل' : 'تأكيد الحفظ'}
