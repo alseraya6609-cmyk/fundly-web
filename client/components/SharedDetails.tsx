@@ -64,6 +64,7 @@ import { startOfToday } from '@/lib/metrics'
 import { FileButton } from './FileButton'
 import { useRecordShare } from './RecordShare'
 import { settlementDoc } from '@/lib/sharedPdf'
+import { namedFile } from '@/components/DocName'
 
 const STATUS_COLOR: Record<string, string> = {
   مكتملة: '#0A5A50',
@@ -347,7 +348,17 @@ export function ReceiptPicker({ file, onChange, label }: { file: File | null; on
           <X className="size-4" />
         </button>
       )}
-      <input type="file" className="hidden" accept="image/*,application/pdf" onChange={(e) => onChange(e.target.files?.[0] ?? null)} />
+      <input
+        type="file"
+        className="hidden"
+        accept="image/*,application/pdf"
+        onChange={async (e) => {
+          const picked = e.target.files?.[0]
+          e.target.value = ''
+          const named = await namedFile(picked)
+          if (named) onChange(named)
+        }}
+      />
     </label>
   )
 }

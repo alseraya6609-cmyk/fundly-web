@@ -1,10 +1,10 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Archive, Ban, CheckCircle2, ClipboardList, FileText, HandCoins, LayoutGrid, Pencil, Plus, Receipt, RotateCcw, Trash2, TrendingUp, UserRound, UsersRound, type LucideIcon } from 'lucide-react'
+import { AlarmClock, Archive, Ban, CheckCircle2, ClipboardList, FileText, HandCoins, LayoutGrid, Pencil, Plus, Receipt, RotateCcw, Trash2, TrendingUp, UserRound, UsersRound, type LucideIcon } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useI18n } from '@/lib/i18n'
 import { moduleHidden, useSession } from '@/lib/session'
-import { currencyOf, custodyRole, useCommitmentExtras, useCurrency, usePersonal, useShared, useStore, type Entry } from '@/lib/data'
+import { assignmentPendingLabel, currencyOf, custodyRole, useCommitmentExtras, useCurrency, usePersonal, useShared, useStore, type Entry } from '@/lib/data'
 import { MODULE_COLORS, PERSONAL_GROUPS, personalGroup, SHARED_GROUPS, sharedLabel } from '@/lib/catalog'
 import { date, matches, money } from '@/lib/format'
 import { Chip, Empty, ErrorBox, InfoRow, Loading, PageHeader, SearchField, SectionTitle, Sheet } from '@/components/ui'
@@ -18,6 +18,7 @@ import { publicName } from '@/lib/requestsWrite'
 import { IncreaseForm, PaymentForm } from '@/components/PaymentForm'
 import { CustodyPanel, SettleDialog } from '@/components/CustodyPanel'
 import { FollowupPanel } from '@/components/FollowupPanel'
+import { AlarmSettingsBox } from '@/components/Notifier'
 import { cancelDebt, custodyRemaining, isOwnerView, needsSettlement, settleBeforeDelete, settleCustody, type SettleMode } from '@/lib/custodyWrite'
 import { EntryError, MEDICATION_ACTIONS, logMedication } from '@/lib/personalWrite'
 import { LEDGER_TYPES, archivedForMe, inHistoryForMe } from '@/lib/sharedWrite'
@@ -103,6 +104,8 @@ function EntriesPage({
       const creator = String(e.details?.['معرف المنشئ'] ?? '').trim()
       return creator && fnd && creator !== fnd ? 'مشترك معك' : undefined
     }
+    const pending = assignmentPendingLabel(e, fnd, t)
+    if (pending) return pending
     return custodyRole(e.details, fnd).role === 'holder' ? 'مسندة إليك' : undefined
   }
   const currency = useCurrency()
@@ -117,6 +120,7 @@ function EntriesPage({
   const [newCourse, setNewCourse] = useState(false)
   const [expenseFor, setExpenseFor] = useState<Entry | null>(null)
   const [notice, setNotice] = useState('')
+  const [alarmOpen, setAlarmOpen] = useState(false)
   const flash = (message: string) => {
     setNotice(message)
     window.setTimeout(() => setNotice(''), 4000)
@@ -180,6 +184,20 @@ function EntriesPage({
           return <Chip key={g.key} active={filter === g.key} label={g.label} icon={g.icon} count={n} onClick={() => setFilter(g.key)} />
         })}
       </div>
+      {/* رنة منبّه المهام والمواعيد من صفحتها نفسها (كما في التطبيق). */}
+      {page === 'personal' && filter === 'organization' && (
+        <button
+          type="button"
+          onClick={() => setAlarmOpen(true)}
+          className="mt-2 flex h-9 items-center gap-1.5 rounded-inner border border-brand bg-white px-3 text-[12.5px] font-extrabold text-brand hover:bg-brand-soft"
+        >
+          <AlarmClock className="size-4" />
+          {t('رنة المنبّه')}
+        </button>
+      )}
+      <Sheet open={alarmOpen} onClose={() => setAlarmOpen(false)}>
+        <AlarmSettingsBox />
+      </Sheet>
 
       <SectionTitle count={list.length}>{t('جميع الالتزامات')}</SectionTitle>
       {query.isLoading ? (
@@ -715,7 +733,7 @@ function EntryDetails({
         {Number(entry.amount) > 0 && <InfoRow label="المبلغ" value={money(entry.amount, t(currencyOf(entry.details, currency)))} />}
         {(money$.pay || money$.increase) && <InfoRow label="المتبقي" value={money(remainingOf(entry), t(ownCurrency))} />}
         <InfoRow label="التاريخ" value={date(entry.due_date)} />
-        <InfoRow label="الحالة" value={t(entry.status)} />
+        <InfoRow label="الحالة" value={(page === 'personal' && assignmentPendingLabel(entry, me.fnd, t)) || t(entry.status)} />
         {fields.map(([key, value]) => (
           <InfoRow key={key} label={key} value={SENSITIVE.test(key) ? t('مخفية في الموقع') : String(value)} />
         ))}

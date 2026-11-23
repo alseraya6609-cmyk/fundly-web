@@ -29,6 +29,7 @@ import {
   type VehicleDraft,
 } from '@/lib/vehicleWrite'
 import { Sheet } from './ui'
+import { namedFile } from '@/components/DocName'
 
 /*
   «إضافة مركبة» كما في التطبيق: التصنيف (برية / بحرية) ثم النوع
@@ -338,7 +339,7 @@ export function VehicleForm({ vehicleClass, vehicleType, initial, assetId, onClo
                 accept="image/*,application/pdf"
                 disabled={uploading}
                 onChange={async (e) => {
-                  const file = e.target.files?.[0]
+                  const file = await namedFile(e.target.files?.[0])
                   e.target.value = ''
                   if (!file) return
                   setUploading(true)

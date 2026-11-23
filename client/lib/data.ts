@@ -153,6 +153,24 @@ export function custodyRole(details: Record<string, unknown> | undefined, fnd: s
   return { role, accepted }
 }
 
+/**
+  عهدة أو دين أُسند برقم تعريفي ولم يُقبل بعد (_assignmentPendingStatus):
+  «بانتظار الموافقة من فلان» لمن أرسله، و«بانتظار قبولك — من فلان» لمن وصله.
+  في البطاقة والتفاصيل معًا بدل «نشطة».
+*/
+export function assignmentPendingLabel(e: Entry, fnd: string, t: (s: string) => string): string | null {
+  if (e.entry_type !== 'عهدة مالية' && e.entry_type !== 'دين / قرض / سلفة') return null
+  if (['مكتملة', 'مكتمل', 'مؤرشف', 'ملغاة', 'ملغى', 'محذوف', 'تمت التسوية', 'مسددة'].includes((e.status ?? '').trim())) return null
+  const d = (k: string) => String(e.details?.[k] ?? '').trim()
+  if (!d('عهدة_مسندة_إلى') || d('عهدة_حالة_الإسناد') !== 'بانتظار القبول') return null
+  if (fnd && d('عهدة_مسندة_إلى') === fnd) {
+    const owner = d('عهدة_مالك_الاسم') || d('عهدة_مالك_المعرّف')
+    return owner ? `${t('بانتظار قبولك — من')} ${owner}` : t('بانتظار قبولك')
+  }
+  const holder = d('عهدة_المسند_إليه_الاسم') || d('عهدة_مسندة_إلى')
+  return holder ? `${t('بانتظار الموافقة من')} ${holder}` : t('بانتظار الموافقة')
+}
+
 /** عهدة أو دين لا يخصني، أو أُسند إليّ ولم أقبله بعد: لا يظهر ولا يُحسب. */
 function personalVisible(e: Entry, fnd: string): boolean {
   if (e.entry_type !== 'عهدة مالية' && e.entry_type !== 'دين / قرض / سلفة') return true
@@ -412,6 +430,14 @@ export const FILES_BUCKET = 'fundly-files'
 /** اسم الملف من مسار الجوال (DocumentStore.fileName). */
 export function fileNameOf(path: string): string {
   return String(path ?? '').split(/[\\/]/).pop()?.trim() ?? ''
+}
+
+/** الاسم كما سمّاه المستخدم: بلا ختم الوقت (1700000000000_) ولا الامتداد (DocumentStore.displayName). */
+export function docDisplayName(path: string): string {
+  let name = fileNameOf(path).replace(/^\d{10,}_/, '')
+  const dot = name.lastIndexOf('.')
+  if (dot > 0 && name.length - dot <= 6) name = name.slice(0, dot)
+  return name.trim()
 }
 
 /** مفتاح الملف في المخزن: base64Url لاسم الملف بلا «=» (FundlyFiles.keyFor). */

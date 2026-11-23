@@ -1,6 +1,6 @@
 import { supabase } from './supabase'
 import { PERSONAL_SLUG } from './catalog'
-import type { Entry } from './data'
+import { docDisplayName, type Entry } from './data'
 import { EXPENSE_SUBCATEGORIES, FINE_SUBCATEGORIES, FORMS, INCOME_SUBCATEGORIES, type EntryForm, type FormField } from './personalForms.gen'
 
 /*
@@ -491,6 +491,8 @@ export async function createEntry(form: EntryForm, values: Values, custom: Value
   if (due) core.dueDate = due
   if (extras?.me) details = withAssignment(form.label, details, holderNameOf(details), extras.me)
   const attachmentUrl = attachment ? await uploadAttachment(userId, attachment) : null
+  // «اسم المستند» المكتوب عند الإرفاق: يظهر به في «المستندات».
+  if (attachment && docDisplayName(attachment.name)) details = { ...details, 'اسم المرفق الإضافي': docDisplayName(attachment.name) }
   const { data, error } = await supabase
     .from(TABLE)
     .insert({
@@ -736,6 +738,7 @@ export async function updateEntry(entry: Entry, form: EntryForm, values: Values,
   }
   const current = rowOf(entry)
   const attachmentUrl = attachment ? await uploadAttachment(userId, attachment) : current.attachment_url
+  if (attachment && docDisplayName(attachment.name)) merged['اسم المرفق الإضافي'] = docDisplayName(attachment.name)
   await updateMerged(entry, {
     ...current,
     entry_type: entry.entry_type || form.label,
@@ -1057,10 +1060,10 @@ export async function addDocument(entry: Entry, file: File) {
   const path = await uploadAttachment(await currentUserId(), file)
   await mutateEntry(entry, (fresh, details) => {
     if ((fresh.attachment_url ?? '').trim()) {
-      const row = { id: String(Date.now()), path, name: file.name, type: 'مستند' }
+      const row = { id: String(Date.now()), path, name: docDisplayName(file.name), type: 'مستند' }
       return { details: { ...fresh.details, [EXTRA_FILES_KEY]: appendJson(details[EXTRA_FILES_KEY] ?? '', row) } }
     }
-    return { attachment_url: path, details: { ...fresh.details, 'نوع المرفق الإضافي': 'مستند', 'اسم المرفق الإضافي': file.name } }
+    return { attachment_url: path, details: { ...fresh.details, 'نوع المرفق الإضافي': 'مستند', 'اسم المرفق الإضافي': docDisplayName(file.name) } }
   })
 }
 

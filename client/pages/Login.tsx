@@ -1,6 +1,6 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { Navigate, useLocation } from 'react-router-dom'
-import { ArrowRight, Eye, EyeOff, KeyRound, Loader2, Lock, Mail, Phone, UserRound, Users } from 'lucide-react'
+import { Apple, ArrowRight, Eye, EyeOff, KeyRound, Loader2, Lock, Mail, MessageSquareText, Phone, UserRound, Users } from 'lucide-react'
 import { useI18n } from '@/lib/i18n'
 import { useSession } from '@/lib/session'
 import {
@@ -236,7 +236,46 @@ function LoginForm({ onMode }: { onMode: (m: Mode) => void }) {
       >
         {t('إنشاء حساب جديد')}
       </button>
+      <SoonMethods />
     </form>
+  )
+}
+
+/** طرق دخول لم تُفعَّل بعد: رصاصية وتحتها «قريبًا» (كما في التطبيق). */
+function SoonMethods() {
+  const { t } = useI18n()
+  const [note, setNote] = useState(false)
+  const items: [string, ReactNode][] = [
+    ['Google', <span key="g" className="text-[17px] font-black">G</span>],
+    ['Apple', <Apple key="a" className="size-5" />],
+    ['Facebook', <span key="f" className="text-[18px] font-black">f</span>],
+    ['رمز SMS للهاتف', <MessageSquareText key="s" className="size-5" />],
+  ]
+  return (
+    <div className="mt-2">
+      <div className="flex items-center gap-3 text-[11.5px] font-bold text-muted">
+        <span className="h-px flex-1 bg-line" />
+        {t('أو تابع عبر')}
+        <span className="h-px flex-1 bg-line" />
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        {items.map(([label, icon]) => (
+          <button
+            key={label}
+            type="button"
+            onClick={() => setNote(true)}
+            className="flex h-14 items-center justify-center gap-2 rounded-field bg-surface text-muted ring-1 ring-line"
+          >
+            {icon}
+            <span className="flex flex-col items-center leading-tight">
+              <span className="text-[12px] font-extrabold">{t(label)}</span>
+              <span className="text-[10px] font-black">{t('قريبًا')}</span>
+            </span>
+          </button>
+        ))}
+      </div>
+      {note && <p className="mt-2 text-center text-[12px] font-bold text-gold-dark">{t('هذه الطريقة قريبًا — ادخل الآن بكلمة المرور')}</p>}
+    </div>
   )
 }
 
@@ -529,10 +568,13 @@ function ResetForm() {
   return (
     <form onSubmit={reset} className="mt-6 flex flex-col gap-4">
       <p className="text-[14px] leading-relaxed text-sub">
-        {t('أرسلنا رمزًا إلى')}{' '}
+        {t('أرسلنا الرمز إلى بريدك المرتبط بالحساب')}{' '}
         <bdi dir="ltr" className="font-bold text-body">
           {maskEmail(sentTo)}
         </bdi>
+      </p>
+      <p className="rounded-inner bg-gold-soft px-4 py-3 text-[12.5px] font-bold leading-relaxed text-gold-dark">
+        {t('الرمز يصل إلى البريد الإلكتروني وليس برسالة نصية على الهاتف — افتح بريدك، وتحقق أيضًا من الرسائل غير المرغوب فيها (Spam).')}
       </p>
       <Field
         label="الرمز"

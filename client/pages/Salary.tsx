@@ -21,6 +21,7 @@ import {
   REJECTED,
   SIGN_HERE,
   SIGN_REMOTE,
+  SIGN_NONE,
   SalaryError,
   dayOf,
   decodeStrokes,
@@ -118,7 +119,7 @@ export default function Salary() {
         {!forEmployee && <Chip active={tab === 1} label="وصلتني" count={q.data?.toMe.length} onClick={() => setTab(1)} />}
         <button type="button" onClick={() => setForm({})} className="ms-auto flex h-11 items-center gap-1.5 rounded-inner bg-brand px-4 text-[13px] font-extrabold text-white hover:bg-brand-dark">
           <Plus className="size-4" />
-          {t('سند جديد')}
+          {t(forEmployee ? 'إضافة راتب' : 'سند جديد')}
         </button>
       </div>
       <div className="no-scrollbar mt-3 flex gap-2 overflow-x-auto pb-1">
@@ -176,6 +177,7 @@ export default function Salary() {
       {form && (
         <ReceiptForm
           existing={form.existing}
+          salaryOnly={forEmployee && !form.existing}
           presetFnd={employeeFnd}
           presetName={employeeName}
           others={q.data?.mine ?? []}
@@ -215,7 +217,7 @@ function ReceiptDetails({ r, asOwner, onEdit, onPrint, onDone }: { r: Receipt; a
   const info: [string, string][] = [
     ['رقم السند', receiptNo(r)],
     ['التاريخ', r.receipt_date],
-    ['طريقة التوقيع', t(r.sign_mode === SIGN_HERE ? signHereLabel(r) : 'أُرسل للاعتماد والتوقيع')],
+    ['طريقة التوقيع', t(r.sign_mode === SIGN_HERE ? signHereLabel(r) : r.sign_mode === SIGN_NONE ? 'بدون توقيع' : 'أُرسل للاعتماد والتوقيع')],
     ...(r.signed_at ? [[r.status === REJECTED ? 'وقت الرفض' : 'وقت التوقيع', stampOf(r.signed_at)] as [string, string]] : []),
     ...(r.notes ? [['ملاحظات', r.notes] as [string, string]] : []),
     ...(r.status === REJECTED && r.reject_reason ? [['سبب الرفض', r.reject_reason] as [string, string]] : []),
@@ -396,6 +398,7 @@ function ReceiptDetails({ r, asOwner, onEdit, onPrint, onDone }: { r: Receipt; a
 
 function ReceiptForm({
   existing,
+  salaryOnly = false,
   presetFnd,
   presetName,
   others,
@@ -403,6 +406,8 @@ function ReceiptForm({
   onDone,
 }: {
   existing?: Receipt
+  /** «إضافة راتب» لموظف بعينه: النوع راتب فقط، بلا «سند قبض». */
+  salaryOnly?: boolean
   presetFnd: string
   presetName: string
   others: Receipt[]
@@ -565,7 +570,7 @@ function ReceiptForm({
       description: salary ? '' : description.trim(),
       notes: notes.trim(),
       sign_mode: signMode,
-      status: signature ? APPROVED : PENDING,
+      status: signature || signMode === SIGN_NONE ? APPROVED : PENDING,
       signature,
       signed_at: signature ? new Date().toISOString() : null,
       reject_reason: '',
@@ -578,7 +583,7 @@ function ReceiptForm({
       await qc.invalidateQueries({ queryKey: ['personal'] })
       await qc.invalidateQueries({ queryKey: ['store'] })
       setSigning(false)
-      onDone(signMode === SIGN_REMOTE ? `${t('أُرسل السند إلى')} ${finalName} ${t('للاعتماد والتوقيع')}` : 'تم حفظ السند الموقّع')
+      onDone(signMode === SIGN_REMOTE ? `${t('أُرسل السند إلى')} ${finalName} ${t('للاعتماد والتوقيع')}` : signMode === SIGN_NONE ? 'تم حفظ السند بدون توقيع' : 'تم حفظ السند الموقّع')
     } catch (e) {
       setSigning(false)
       setError(e instanceof SalaryError ? e.message : errorText(e) || 'تعذّر الحفظ. حاول مرة أخرى.')
@@ -606,14 +611,20 @@ function ReceiptForm({
 
   return (
     <Sheet open onClose={onClose}>
-      <p className="text-[18px] font-extrabold text-title">{t(existing ? 'تعديل السند' : 'سند جديد')}</p>
+      <p className="text-[18px] font-extrabold text-title">{t(existing ? 'تعديل السند' : salaryOnly ? 'سند قبض راتب' : 'سند جديد')}</p>
       <div className="mt-4 grid grid-cols-2 gap-2">
-        <button type="button" onClick={() => setKind(KIND_SALARY)} className={choice(salary)}>
-          {t('سند قبض راتب')}
-        </button>
-        <button type="button" onClick={() => setKind(KIND_GENERAL)} className={choice(!salary)}>
-          {t('سند قبض')}
-        </button>
+        {salaryOnly ? (
+          <p className="col-span-2 flex h-11 items-center justify-center rounded-inner border border-brand bg-brand-soft text-[13px] font-extrabold text-brand">{t('راتب')}</p>
+        ) : (
+          <>
+            <button type="button" onClick={() => setKind(KIND_SALARY)} className={choice(salary)}>
+              {t('سند قبض راتب')}
+            </button>
+            <button type="button" onClick={() => setKind(KIND_GENERAL)} className={choice(!salary)}>
+              {t('سند قبض')}
+            </button>
+          </>
+        )}
         <button type="button" onClick={() => setParties(PARTIES_EMPLOYER)} className={choice(parties === PARTIES_EMPLOYER)}>
           {t('صاحب العمل والموظف')}
         </button>
@@ -708,11 +719,14 @@ function ReceiptForm({
         <button type="button" onClick={() => setSignMode(SIGN_REMOTE)} className={choice(signMode === SIGN_REMOTE)}>
           {t('إرسال للاعتماد والتوقيع')}
         </button>
+        <button type="button" onClick={() => setSignMode(SIGN_NONE)} className={cn(choice(signMode === SIGN_NONE), 'col-span-2')}>
+          {t('بدون توقيع')}
+        </button>
       </div>
       {error && <p className="mt-3 rounded-inner bg-danger-soft px-3 py-2 text-[12px] font-bold text-danger">{t(error)}</p>}
       <button type="button" disabled={busy} onClick={submit} className="mt-5 flex w-full items-center justify-center gap-2 rounded-field bg-brand py-3.5 text-[15px] font-extrabold text-white hover:bg-brand-dark disabled:opacity-60">
         {busy && <Loader2 className="size-4 animate-spin" />}
-        {t(signMode === SIGN_HERE ? 'توقيع المستلم وحفظ' : 'إرسال للاعتماد والتوقيع')}
+        {t(signMode === SIGN_HERE ? 'توقيع المستلم وحفظ' : signMode === SIGN_NONE ? 'حفظ بدون توقيع' : 'إرسال للاعتماد والتوقيع')}
       </button>
 
       <Confirm
@@ -812,7 +826,7 @@ ${r.notes.trim() ? `<div class="box"><span>${esc(t('ملاحظات'))}</span><di
 ${r.status === REJECTED && r.reject_reason.trim() ? `<div class="box"><span style="color:#C4392E">${esc(t('سبب الرفض'))}</span><div>${esc(r.reject_reason.trim())}</div></div>` : ''}
 <div class="sign">${sig ? `<svg viewBox="0 0 1 1">${sig}</svg>` : ''}<div><span style="font-size:10.5px;color:#5C6B68">${esc(t('توقيع المستلم'))}</span><div style="font-weight:800">${esc(r.employee_name)}</div>${
     r.signed_at ? `<div style="font-size:10.5px">${esc(t('وقت التوقيع'))}: ${esc(stampOf(r.signed_at))}</div>` : ''
-  }<div style="font-size:10.5px;margin-top:4px">${esc(t('طريقة التوقيع'))}: ${esc(t(r.sign_mode === SIGN_HERE ? signHereLabel(r) : 'أُرسل للاعتماد والتوقيع'))}</div></div></div>
+  }<div style="font-size:10.5px;margin-top:4px">${esc(t('طريقة التوقيع'))}: ${esc(t(r.sign_mode === SIGN_HERE ? signHereLabel(r) : r.sign_mode === SIGN_NONE ? 'بدون توقيع' : 'أُرسل للاعتماد والتوقيع'))}</div></div></div>
 <div class="foot"><span>${esc(t('صدر بتاريخ'))} ${esc(dayOf(new Date()))}</span><span>Fundly</span></div></body></html>`
   return (
     <div className="fixed inset-0 z-[70] flex flex-col bg-page" role="dialog" aria-modal="true">

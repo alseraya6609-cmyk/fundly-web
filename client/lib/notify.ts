@@ -135,7 +135,10 @@ export function parseClock(raw: string): [number, number] | null {
   return [hour, minute]
 }
 
-export type PlannedNotice = { key: string; at: Date; title: string; body: string; to?: string }
+export type PlannedNotice = { key: string; at: Date; title: string; body: string; to?: string; alarm?: boolean }
+
+/** FundlyNotifications._isAlarmItem: بنود «المتابعة والتخطيط» وتذكيرات التقويم التي أنشأها المستخدم. */
+export const isAlarmItem = (item: CalItem) => item.category === 'organization' || item.isUserCreated
 
 const pad = (n: number) => String(n).padStart(2, '0')
 
@@ -170,6 +173,7 @@ export function planReminders(items: CalItem[], settings: ReminderSettings, now:
       title,
       body: item.isExpiry ? `${t('ينتهي اليوم')} (${dateText}) — ${what}` : `${t('موعده الآن')} ${timeText} — ${what}`,
       to: item.to,
+      alarm: isAlarmItem(item),
     })
     if (item.leadMinutes > 0) {
       // «وقت التذكير»: قبل الموعد بساعة/12 ساعة/يوم أو مخصص.
@@ -181,6 +185,7 @@ export function planReminders(items: CalItem[], settings: ReminderSettings, now:
         title,
         body: `${t('موعده بعد')} ${span} — ${dateText} ${timeText} — ${what}`,
         to: item.to,
+        alarm: isAlarmItem(item),
       })
     } else if (lead > 0) {
       out.push({
@@ -189,6 +194,7 @@ export function planReminders(items: CalItem[], settings: ReminderSettings, now:
         title,
         body: `${t(item.isExpiry ? 'ينتهي بعد' : 'موعده بعد')} ${lead} ${t(lead === 1 ? 'يوم' : 'أيام')} (${dateText}) — ${what}`,
         to: item.to,
+        alarm: isAlarmItem(item),
       })
     }
   }

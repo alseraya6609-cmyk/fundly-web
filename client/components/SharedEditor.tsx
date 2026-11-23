@@ -33,6 +33,7 @@ import {
 import { Confirm } from './Confirm'
 import { FndCopy, fndIn } from './FndCopy'
 import { Sheet } from './ui'
+import { namedFile } from '@/components/DocName'
 
 /*
   نموذج الالتزام المشترك (_openSharedEntryForm): الأنواع الثلاثة بحقولها،
@@ -475,7 +476,17 @@ function Body({ form, entry, onDone }: { form: SharedFormDef; entry?: Entry; onD
               <X className="size-4" />
             </button>
           )}
-          <input type="file" className="hidden" accept="image/*,application/pdf" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          <input
+            type="file"
+            className="hidden"
+            accept="image/*,application/pdf"
+            onChange={async (e) => {
+              const picked = e.target.files?.[0]
+              e.target.value = ''
+              const named = await namedFile(picked)
+              if (named) setFile(named)
+            }}
+          />
         </label>
       )
     return null

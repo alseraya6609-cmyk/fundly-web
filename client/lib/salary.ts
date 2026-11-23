@@ -19,6 +19,8 @@ export const KIND_SALARY = 'راتب'
 export const KIND_GENERAL = 'عام'
 export const SIGN_HERE = 'here'
 export const SIGN_REMOTE = 'remote'
+/** بدون توقيع: يُحفظ معتمدًا بلا توقيع (ترحيل 202611230001 في التطبيق). */
+export const SIGN_NONE = 'none'
 export const PARTIES_EMPLOYER = 'employer'
 export const PARTIES_HANDOVER = 'handover'
 export const PENDING = 'بانتظار الاعتماد'

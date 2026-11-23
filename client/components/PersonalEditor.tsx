@@ -49,6 +49,7 @@ import {
 import { Sheet } from './ui'
 import { Confirm } from './Confirm'
 import { GeoFieldButton, PlaceModes } from './PlaceModes'
+import { namedFile } from '@/components/DocName'
 
 const GEO_FIELD = 'الموقع الجغرافي'
 const PLACES_FORM = 'مواقع وأماكن'
@@ -619,7 +620,17 @@ function FormBody({
               <X className="size-4" />
             </button>
           )}
-          <input type="file" className="hidden" accept="image/*,application/pdf" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          <input
+            type="file"
+            className="hidden"
+            accept="image/*,application/pdf"
+            onChange={async (e) => {
+              const picked = e.target.files?.[0]
+              e.target.value = ''
+              const named = await namedFile(picked)
+              if (named) setFile(named)
+            }}
+          />
         </label>
       </div>
       {error && (

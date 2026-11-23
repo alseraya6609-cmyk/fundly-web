@@ -9,6 +9,7 @@ import { FileError, uploadDeviceFile } from '@/lib/files'
 import { AssetError, saveEntry, validateEntry, type AssetGroup } from '@/lib/assetWrite'
 import { Confirm } from './Confirm'
 import { Sheet } from './ui'
+import { namedFile } from '@/components/DocName'
 
 /* نموذج سجل الأصل كما في التطبيق: حقول المجموعة بترتيبها، والمرفق ملف من ملفات التطبيق. */
 
@@ -115,7 +116,7 @@ export function AssetEntryForm({
                       accept="image/*,application/pdf"
                       disabled={uploading}
                       onChange={async (e) => {
-                        const file = e.target.files?.[0]
+                        const file = await namedFile(e.target.files?.[0])
                         e.target.value = ''
                         if (!file) return
                         setUploading(true)

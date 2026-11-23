@@ -1,5 +1,5 @@
 import { supabase } from './supabase'
-import type { Entry } from './data'
+import { docDisplayName, type Entry } from './data'
 import { FORMS } from './personalForms.gen'
 import { mergeDetails } from './personalWrite'
 import { stampInvites } from './requestsWrite'
@@ -349,6 +349,12 @@ async function uploadAttachment(uid: string, file: File): Promise<string> {
   return path
 }
 
+/** «اسم المستند» المكتوب عند الإرفاق: يظهر به في «المستندات». */
+function withAttachmentName<T extends Record<string, string>>(details: T, file: File): T {
+  const shown = docDisplayName(file.name)
+  return shown ? { ...details, 'اسم المستند المرفق': shown } : details
+}
+
 async function currentUid() {
   const { data, error } = await supabase.auth.getUser()
   if (error || !data.user) throw new SharedFormError('انتهت الجلسة — ادخل من جديد')
@@ -369,7 +375,7 @@ export async function createShared(form: SharedFormDef, v: SharedValues, me: str
     amount,
     due_date: databaseDate(due),
     status: 'نشطة',
-    details: stampInvites(details),
+    details: stampInvites(attachment ? withAttachmentName(details, attachment) : details),
     attachment_url: attachmentUrl,
   })
   if (error) throw error
@@ -399,7 +405,11 @@ export async function updateShared(entry: Entry, form: SharedFormDef, v: SharedV
     if (amount !== Math.round(Number(entry.amount) || 0)) patch.amount = amount
     const dueDb = databaseDate(due)
     if ((dueDb ?? null) !== (entry.due_date ? String(entry.due_date).slice(0, 10) : null)) patch.due_date = dueDb
-    if (attachmentUrl) patch.attachment_url = attachmentUrl
+    if (attachmentUrl && attachment) {
+      patch.attachment_url = attachmentUrl
+      const shown = docDisplayName(attachment.name)
+      if (shown) finalDetails['اسم المستند المرفق'] = shown
+    }
     const { data: saved, error: saveError } = await supabase.from('shared_entries').update(patch).eq('id', entry.id).eq('updated_at', data.updated_at).select('id')
     if (saveError) throw saveError
     if (saved && saved.length) return

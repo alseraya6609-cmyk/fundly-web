@@ -31,6 +31,7 @@ import { FileButton } from './FileButton'
 import { MemberPicker } from './SharedEditor'
 import { Sheet } from './ui'
 import { PlaceModes } from './PlaceModes'
+import { namedFile } from '@/components/DocName'
 
 /*
   من تفاصيل الالتزام المشترك في التطبيق (shared_commitments_screen.dart):
@@ -658,7 +659,7 @@ function SimpleForm({ entry, form, me, onClose, onDone }: { entry: Entry; form: 
                 accept="image/*,application/pdf"
                 disabled={uploading}
                 onChange={async (e) => {
-                  const f = e.target.files?.[0]
+                  const f = await namedFile(e.target.files?.[0])
                   e.target.value = ''
                   if (!f) return
                   setUploading(true)

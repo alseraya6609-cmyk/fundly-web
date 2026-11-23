@@ -7,6 +7,7 @@ import type { Entry } from '@/lib/data'
 import { EntryError, FOLLOWUP_TYPES, addDocument, addFollowup, deleteFollowup, followupsOf } from '@/lib/personalWrite'
 import { Confirm } from './Confirm'
 import { Sheet } from './ui'
+import { namedFile } from '@/components/DocName'
 
 /*
   «المتابعة والتخطيط» و«مستند» داخل الالتزام كما في التطبيق (_addFollowupRow،
@@ -171,10 +172,12 @@ export function FollowupPanel({ entry, canWrite, onChanged }: { entry: Entry; ca
               type="file"
               className="hidden"
               accept="image/*,application/pdf"
-              onChange={(e) => {
+              onChange={async (e) => {
                 setError('')
-                setDoc(e.target.files?.[0] ?? null)
+                const picked = e.target.files?.[0]
                 e.target.value = ''
+                const named = await namedFile(picked)
+                if (named) setDoc(named)
               }}
             />
           </label>

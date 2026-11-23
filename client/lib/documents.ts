@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import {
   assetMeta,
-  fileNameOf,
+  docDisplayName,
   useAssetEntries,
   useAssets,
   usePeople,
@@ -258,7 +258,7 @@ function sharedDocs(rows: Entry[]): AppDocument[] {
       const path = str(extra['المرفق'])
       const date = item.date ?? ''
       if (!path && !date) continue
-      add(item.kind || 'مستندات', item.title ?? '', path, date)
+      add(item.kind || 'مستندات', (item.title ?? '').trim() || (path ? docDisplayName(path) : ''), path, date)
     }
     const file = str(row.attachment_url)
     if (file) {
@@ -300,7 +300,7 @@ function peopleDocs(people: Person[]): AppDocument[] {
     }
     for (const path of (details['مرفقات أخرى'] ?? '').split('|')) {
       if (!path.trim()) continue
-      out.push(doc({ module: 'الأفراد والجهات', section, group: 'مرفقات أخرى', title: fileNameOf(path), owner: name, localPath: path.trim() }))
+      out.push(doc({ module: 'الأفراد والجهات', section, group: 'مرفقات أخرى', title: docDisplayName(path), owner: name, localPath: path.trim() }))
     }
   })
   return out
@@ -315,7 +315,9 @@ function assetDocs(assets: Asset[], entries: { asset_id: string; kind: string; d
     if (!asset) continue
     const data = entry.data ?? {}
     const type = str(data['نوع المستند'])
-    const name = str(data['اسم المستند'])
+    const file = str(data['الملف المرفق'])
+    // اسم المستند، وإلا الاسم الذي كُتب عند إرفاق الملف، ثم نوعه.
+    const name = str(data['اسم المستند']) || (file ? docDisplayName(file) : '')
     out.push(
       doc({
         module: assetModule(asset.category),
@@ -325,7 +327,7 @@ function assetDocs(assets: Asset[], entries: { asset_id: string; kind: string; d
         owner: asset.title,
         number: str(data['رقم المستند']),
         expiry: parseDate(data['تاريخ الانتهاء']),
-        localPath: str(data['الملف المرفق']),
+        localPath: file,
       }),
     )
   }
@@ -362,7 +364,7 @@ function assetDocs(assets: Asset[], entries: { asset_id: string; kind: string; d
           module: 'المركبات ووسائل النقل',
           section: assetSection(asset),
           group: 'مستندات أخرى',
-          title: fileNameOf(line),
+          title: docDisplayName(line),
           owner: asset.title,
           localPath: line.trim(),
         }),

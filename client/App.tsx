@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-route
 import { I18nProvider } from '@/lib/i18n'
 import { SessionProvider, useSession } from '@/lib/session'
 import { AppShell } from '@/components/AppShell'
+import { DocNameHost } from '@/components/DocName'
 import Login from '@/pages/Login'
 import Home from '@/pages/Home'
 import { Personal, Shared } from '@/pages/Entries'
@@ -73,6 +74,7 @@ export default function App() {
               </Route>
             </Routes>
           </BrowserRouter>
+          <DocNameHost />
         </SessionProvider>
       </I18nProvider>
     </QueryClientProvider>

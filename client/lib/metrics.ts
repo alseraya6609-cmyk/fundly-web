@@ -52,6 +52,8 @@ export type CalItem = {
   repeat: string
   isUserCreated: boolean
   isExpiry: boolean
+  /** فئة البند الشخصي (organization = «المتابعة والتخطيط») — عليها رنة المنبّه. */
+  category?: string
   /** أيام التذكير قبل الموعد: -1 = الافتراضي من الإعدادات، NO_REMINDER = بدون. */
   remindBeforeDays: number
   /** «وقت التذكير» بالدقائق قبل الموعد (التذكير المفعّل)، أو -1. */
@@ -396,6 +398,7 @@ export function useMetrics(): { loading: boolean; metrics: Metrics } {
           item({
             title: e.title || type,
             module: 'الالتزامات الشخصية',
+            category: e.category,
             date: recurring ? nextOccurrence(due, repeat, today) : due,
             sourceId: e.id,
             status: finished ? 'مكتملة' : e.status,

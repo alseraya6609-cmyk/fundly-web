@@ -10,6 +10,7 @@ import { FileError, uploadDeviceFile } from '@/lib/files'
 import { Sheet } from './ui'
 import { Confirm } from './Confirm'
 import { PersonPlaceButton } from './PlaceModes'
+import { namedFile } from '@/components/DocName'
 
 /*
   نموذج الفرد والجهة كما في التطبيق (_openContactFormSheet): النوع أولًا،
@@ -79,7 +80,7 @@ function FilePick({ file, onChange, label }: { file: string; onChange: (name: st
           accept="image/*,application/pdf"
           disabled={busy}
           onChange={async (e) => {
-            const picked = e.target.files?.[0]
+            const picked = await namedFile(e.target.files?.[0])
             e.target.value = ''
             if (!picked) return
             setBusy(true)
