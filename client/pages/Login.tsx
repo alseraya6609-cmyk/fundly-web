@@ -1,5 +1,5 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
-import { Navigate, useLocation } from 'react-router-dom'
+import { Link, Navigate, useLocation } from 'react-router-dom'
 import { Apple, ArrowRight, Eye, EyeOff, KeyRound, Loader2, Lock, Mail, MessageSquareText, Phone, UserRound, Users } from 'lucide-react'
 import { useI18n } from '@/lib/i18n'
 import { useSession } from '@/lib/session'
@@ -25,7 +25,8 @@ export default function Login() {
   const { t } = useI18n()
   const { user } = useSession()
   const location = useLocation()
-  const [mode, setMode] = useState<Mode>('login')
+  // «إنشاء حساب» من الصفحة التعريفية: /login?mode=signup
+  const [mode, setMode] = useState<Mode>(() => (new URLSearchParams(location.search).get('mode') === 'signup' ? 'signup' : 'login'))
 
   if (user) {
     const from = (location.state as { from?: string } | null)?.from ?? '/'
@@ -71,7 +72,10 @@ export default function Login() {
               {t('تسجيل الدخول')}
             </button>
           ) : (
-            <span />
+            <Link to="/welcome" className="flex items-center gap-1.5 text-[13px] font-bold text-brand">
+              <ArrowRight className="size-4 ltr:rotate-180" />
+              {t('الصفحة الرئيسية')}
+            </Link>
           )}
           <LanguagePicker compact />
         </div>

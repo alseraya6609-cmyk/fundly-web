@@ -5,7 +5,8 @@ import { useI18n } from '@/lib/i18n'
 import { useSession } from '@/lib/session'
 import { cn } from '@/lib/format'
 
-export const SITE = 'https://fundlyglobal.netlify.app'
+/** صفحات السياسة والشروط وحذف الحساب على الموقع نفسه (public/*.html). */
+export const SITE = ''
 const APP_STORE = 'https://apps.apple.com/app/id6829661981'
 
 /** روابط المتجرين: من إعدادات لوحة التحكم إن وُجدت. */

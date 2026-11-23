@@ -21,6 +21,7 @@ import Salary from '@/pages/Salary'
 import Delegations from '@/pages/Delegations'
 import Support from '@/pages/Support'
 import NotFound from '@/pages/NotFound'
+import Landing from '@/pages/Landing'
 import { Maintenance, PolicyConsent, Splash, Suspended } from '@/pages/Gates'
 
 const queryClient = new QueryClient({
@@ -32,6 +33,8 @@ function Guarded() {
   const { ready, user, config, account, policyAccepted } = useSession()
   const location = useLocation()
   if (!ready) return <Splash />
+  // الزائر على fundlyglobal.com يرى الصفحة التعريفية أولًا، وفيها الدخول وإنشاء الحساب.
+  if (!user && location.pathname === '/') return <Landing />
   if (config?.maintenance) return <Maintenance />
   if (!user) return <Navigate to="/login" replace state={{ from: location.pathname + location.search }} />
   if (account?.suspended) return <Suspended />
@@ -45,6 +48,13 @@ function LoginRoute() {
   return <Login />
 }
 
+/** الصفحة التعريفية لأي أحد، ولو كان مسجّلًا (رابط الشعار وزر «عن فوندلي»). */
+function WelcomeRoute() {
+  const { ready } = useSession()
+  if (!ready) return <Splash />
+  return <Landing />
+}
+
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -53,6 +63,7 @@ export default function App() {
           <BrowserRouter>
             <Routes>
               <Route path="/login" element={<LoginRoute />} />
+              <Route path="/welcome" element={<WelcomeRoute />} />
               <Route element={<Guarded />}>
                 <Route index element={<Home />} />
                 <Route path="me" element={<Personal />} />
