@@ -1,7 +1,7 @@
 import { supabase } from './supabase'
 import type { UnitContract, UnitPayment } from './data'
 import { AssetError, payExtra } from './assetWrite'
-import { K, PAY, decodeLease, encodeLease, encodePayExtra, isoDay, num, parseDay, payStatusFor } from './lease'
+import { K, PAY, decodeLease, encodeLease, encodePayExtra, ensureRowIds, isoDay, num, parseDay, payStatusFor, syncLeasePayments } from './lease'
 import { uid } from './vehicleWrite'
 
 /*
@@ -284,4 +284,45 @@ export async function savePayment(contractId: string, existing: UnitPayment | nu
 export const payNameOf = (p: UnitPayment) => {
   const extra = payExtra(p.notes)
   return extra[PAY.name] || extra[PAY.kind] || PAY.rent
+}
+
+/* ===== «إضافة دفعة» من الوحدة بنافذة العقد نفسها (_addLeaseRowFromUnit) ===== */
+
+/** يضيف سطر دفعة أو رسم أو تأمين إلى العقد، ثم يربطه بجدول الدفعات. */
+export async function addLeaseRow(contract: UnitContract, list: 'payments' | 'adminFees' | 'deposits', row: Record<string, string>): Promise<UnitContract> {
+  const { data, error } = await supabase.from('property_unit_contracts').select('*').eq('id', contract.id).maybeSingle()
+  if (error) throw error
+  const current = (data as UnitContract | null) ?? contract
+  const lease = decodeLease(current.notes)
+  lease[list].push({ ...row })
+  ensureRowIds(lease)
+  const notes = encodeLease(lease)
+  const { error: saveError } = await supabase.from('property_unit_contracts').update({ notes }).eq('id', contract.id)
+  if (saveError) throw saveError
+  const saved = { ...current, notes }
+  await syncLeasePayments(saved)
+  return saved
+}
+
+/* ===== «إلغاء المسودة» (_discardDraft) ===== */
+
+/**
+ * تُحذف المسودة ودفعاتها، ومعها مسودات الوحدات الأخرى في العقد متعدد الوحدات
+ * نفسه. يعيد مفاتيح الوحدات التي كانت عليها، لتعود شاغرة.
+ */
+export async function discardDraftContract(contract: UnitContract): Promise<string[]> {
+  const drafts: UnitContract[] = [contract]
+  const group = (contract.group_key ?? '').trim()
+  if (group) {
+    const { data, error } = await supabase.from('property_unit_contracts').select('*').eq('asset_id', contract.asset_id).eq('group_key', group)
+    if (error) throw error
+    for (const c of (data ?? []) as UnitContract[]) if (c.id !== contract.id && c.status === 'pending') drafts.push(c)
+  }
+  for (const c of drafts) {
+    const { error: payError } = await supabase.from('property_unit_payments').delete().eq('contract_id', c.id)
+    if (payError) throw payError
+    const { error: delError } = await supabase.from('property_unit_contracts').delete().eq('id', c.id)
+    if (delError) throw delError
+  }
+  return drafts.map((c) => c.unit_key)
 }

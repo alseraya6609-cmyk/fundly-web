@@ -109,12 +109,15 @@ export function Chip({
   label,
   icon: Icon,
   count,
+  dot,
   onClick,
 }: {
   active: boolean
   label: string
   icon?: LucideIcon
   count?: number
+  /** نقطة حمراء: القسم يحتاج متابعة. */
+  dot?: boolean
   onClick: () => void
 }) {
   const { t } = useI18n()
@@ -123,7 +126,7 @@ export function Chip({
       type="button"
       onClick={onClick}
       className={cn(
-        'flex h-11 shrink-0 items-center gap-2 rounded-inner border px-4 text-[13px] font-bold transition-colors',
+        'relative flex h-11 shrink-0 items-center gap-2 rounded-inner border px-4 text-[13px] font-bold transition-colors',
         active ? 'border-brand bg-brand text-white' : 'border-line bg-white text-body hover:border-hairline',
       )}
     >
@@ -139,6 +142,7 @@ export function Chip({
           {count}
         </span>
       )}
+      {dot && <span data-dot="" aria-label={t('يحتاج متابعة')} className="absolute -top-1 end-1 size-2.5 rounded-full border-2 border-white bg-danger" />}
     </button>
   )
 }

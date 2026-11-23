@@ -73,8 +73,10 @@ export function useLeasePrint(): { open: (job: Job) => void; ui: ReactNode } {
         email: str(d['settings_profile_email']),
         logo: str(d['user_logo_image_v1']) || null,
       },
-      signature: signatureStrokes(d['user_signature_strokes_v1']),
-      stamp: str(d['user_stamp_image_v1']),
+      // المحفوظ داخل العقد عند توقيعه، وإلا (عقد وُقِّع قبل ذلك) توقيع هذا الحساب.
+      ...(job.lease.signature || job.lease.stamp
+        ? { signature: signatureStrokes(job.lease.signature ?? ''), stamp: job.lease.stamp ?? '' }
+        : { signature: signatureStrokes(d['user_signature_strokes_v1']), stamp: str(d['user_stamp_image_v1']) }),
       attachments,
     })
   }, [job, store.data, profile, currency, t, lang, dir, attachments])

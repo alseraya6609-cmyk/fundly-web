@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { CalendarCheck2, CalendarClock, Loader2, Pencil, Plus, Printer, RefreshCw, XCircle } from 'lucide-react'
+import { CalendarCheck2, CalendarClock, FileSpreadsheet, Loader2, Pencil, Plus, Printer, ReceiptText, RefreshCw, XCircle } from 'lucide-react'
 import { cn, money } from '@/lib/format'
 import { useI18n } from '@/lib/i18n'
 import { useCurrency, type Asset, type UnitContract, type UnitPayment } from '@/lib/data'
@@ -23,14 +23,17 @@ import {
   extendPlan,
   payNameOf,
   renewalRange,
+  addLeaseRow,
   savePayment,
   type ExtendBy,
 } from '@/lib/leaseActions'
-import type { Renewal } from './LeaseForm'
+import { RowEditor, type Renewal } from './LeaseForm'
 import { leasePrintTitle, useLeasePrint } from './LeasePrint'
 import { Confirm } from './Confirm'
 import { SettleRent } from './SettleRent'
 import { InfoRow, Sheet } from './ui'
+import { TextShareSheet } from './AssetExtras'
+import { ReceiptForm, ReceiptPicker, financialClaimText } from './UnitReceipt'
 
 /*
   «إدارة الإيجار» في صفحة الوحدة: العقد الحالي، ومدته وإجراءاته (تمديد قبل
@@ -83,6 +86,8 @@ export function UnitLeaseBox({
   // «طباعة عقد الإيجار»: نموذج العقد المعتمد بمرفقاته، مباشرة من هنا.
   const printLease = contract && Object.keys(decodeLease(contract.notes).contract).length ? decodeLease(contract.notes) : null
   const [editingPay, setEditingPay] = useState<{ existing: UnitPayment | null } | null>(null)
+  const [receipt, setReceipt] = useState<{ pick: true } | { payment: UnitPayment } | null>(null)
+  const [claim, setClaim] = useState(false)
   const [notice, setNotice] = useState('')
   const [choosing, setChoosing] = useState(false)
   const flash = (m: string) => {
@@ -105,10 +110,14 @@ export function UnitLeaseBox({
   return (
     <div className="mt-5">
       <div className="mb-2 flex items-center justify-between gap-2">
-        <p className="flex items-center gap-2 text-[14px] font-extrabold text-title">
-          <span className="h-4 w-1 rounded-full bg-gold" />
-          {t('إدارة الإيجار')}
-        </p>
+        <div>
+          <p className="flex items-center gap-2 text-[14px] font-extrabold text-title">
+            <span className="h-4 w-1 rounded-full bg-gold" />
+            {t('إدارة الإيجار')}
+          </p>
+          {/* العقد محفوظ مسودة: «مسودة» تحت «إدارة الإيجار». */}
+          {contract?.status === 'pending' && <p className="ms-3 text-[11.5px] font-extrabold text-gold-dark">{t('مسودة')}</p>}
+        </div>
         {editable && !contract && (
           <button type="button" onClick={() => (setError(''), blocked() ? setError(blockedMessage) : onMulti ? setChoosing(true) : onLease())} className="flex items-center gap-1 rounded-full bg-brand px-3 py-1.5 text-[12px] font-extrabold text-white">
             <Plus className="size-4" />
@@ -175,6 +184,13 @@ export function UnitLeaseBox({
           </div>
 
           <DuesBox payments={payments} editable={editable} open={contract.status !== 'cancelled'} canAdd onPay={setPaying} onEdit={(p) => setEditingPay({ existing: p })} />
+          {/* نفس أزرار التطبيق: «سند قبض» يعرض الدفعات ويُختار منها المسدد، و«مطالبة مالية». */}
+          {contract.status !== 'cancelled' && (
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <ActionTile icon={ReceiptText} label="سند قبض" onClick={() => (payments.length ? (setError(''), setReceipt({ pick: true })) : setError('لا توجد دفعات بعد.'))} />
+              <ActionTile icon={FileSpreadsheet} label="مطالبة مالية" onClick={() => (setError(''), setClaim(true))} />
+            </div>
+          )}
         </>
       )}
 
@@ -194,6 +210,12 @@ export function UnitLeaseBox({
         </Sheet>
       )}
       {leasePrint.ui}
+      {receipt && contract && ('pick' in receipt ? (
+        <ReceiptPicker payments={payments} currency={t(currency)} onClose={() => setReceipt(null)} onPick={(p) => setReceipt({ payment: p })} />
+      ) : (
+        <ReceiptForm payment={receipt.payment} contract={contract} assetTitle={asset.title} unitName={unit.name} currency={currency} onClose={() => setReceipt(null)} />
+      ))}
+      {claim && contract && <TextShareSheet title="مطالبة مالية" text={financialClaimText(asset.title, unit.name, contract, payments, t)} onClose={() => setClaim(false)} />}
       {extending && contract && (
         <ExtendFlow
           contract={contract}
@@ -245,7 +267,18 @@ export function UnitLeaseBox({
           }}
         />
       )}
-      {editingPay && contract && (
+      {editingPay && contract && !editingPay.existing && leaseHasData(contract) && (
+        <LeaseRowAdd
+          contract={contract}
+          onClose={() => setEditingPay(null)}
+          onSaved={() => refresh()}
+          onDone={() => {
+            setEditingPay(null)
+            flash('تم حفظ الدفعة بنجاح')
+          }}
+        />
+      )}
+      {editingPay && contract && !(!editingPay.existing && leaseHasData(contract)) && (
         <PaymentForm
           contractId={contract.id}
           existing={editingPay.existing}
@@ -561,6 +594,79 @@ export function CancelContractFlow({
         </button>
       </div>
     </Sheet>
+  )
+}
+
+type LeaseList = 'payments' | 'adminFees' | 'deposits'
+const LEASE_KINDS: [string, LeaseList][] = [
+  [PAY.rent, 'payments'],
+  ['رسوم إدارية', 'adminFees'],
+  ['تأمين', 'deposits'],
+]
+
+/** عقد مفصّل (من «إضافة عقار»): تُضاف دفعاته بنافذة العقد نفسها. */
+export const leaseHasData = (contract: UnitContract) => {
+  const l = decodeLease(contract.notes)
+  return Object.keys(l.contract).length > 0 || l.payments.length > 0 || l.adminFees.length > 0 || l.deposits.length > 0
+}
+
+/**
+ * _addLeaseRowFromUnit: «إضافة دفعة» من داخل الوحدة بنفس خانات العقد في
+ * «إضافة عقار» (دفعة إيجارية / رسوم إدارية / تأمين)، ويُحفظ السطر في العقد
+ * ثم يُربط بجدول الدفعات.
+ */
+export function LeaseRowAdd({ contract, onClose, onSaved, onDone }: { contract: UnitContract; onClose: () => void; onSaved: () => Promise<unknown>; onDone: () => void }) {
+  const { t } = useI18n()
+  const [current, setCurrent] = useState(contract)
+  const [list, setList] = useState<LeaseList | null>(null)
+  const [round, setRound] = useState(0)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  if (!list)
+    return (
+      <Sheet open onClose={onClose}>
+        <p className="text-[17px] font-extrabold text-title">{t('إضافة دفعة')}</p>
+        <div className="mt-3 flex flex-col gap-2">
+          {LEASE_KINDS.map(([label, key]) => (
+            <button key={key} type="button" onClick={() => setList(key)} className="flex h-12 items-center justify-between rounded-field border border-line bg-white px-4 text-[14px] font-extrabold text-ink hover:border-brand hover:text-brand">
+              {t(label)}
+              <Plus className="size-4" />
+            </button>
+          ))}
+        </div>
+      </Sheet>
+    )
+  const count = decodeLease(current.notes)[list].length
+  return (
+    <>
+      <RowEditor
+        key={round}
+        list={list}
+        number={count + 1}
+        onClose={onClose}
+        onSave={async (row, another) => {
+          if (busy) return
+          setBusy(true)
+          setError('')
+          try {
+            const saved = await addLeaseRow(current, list, row)
+            setCurrent(saved)
+            await onSaved()
+            if (another) setRound((r) => r + 1)
+            else onDone()
+          } catch (e) {
+            setError(`${t('تعذّر حفظ الدفعة:')} ${errorText(e)}`)
+          } finally {
+            setBusy(false)
+          }
+        }}
+      />
+      {error && (
+        <div className="fixed inset-x-0 bottom-4 z-[80] mx-auto w-fit max-w-[90vw] rounded-inner bg-danger px-4 py-2 text-[12.5px] font-bold text-white shadow-lg" role="alert">
+          {error}
+        </div>
+      )}
+    </>
   )
 }
 

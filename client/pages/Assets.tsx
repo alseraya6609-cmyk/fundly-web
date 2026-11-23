@@ -38,6 +38,7 @@ import { PROPERTY_TYPE_KEY, archiveUnit, decodeUnits, toggleUnitFreeze, unitHasO
 import { LeaseForm, type Renewal } from '@/components/LeaseForm'
 import { CancelContractFlow, UnitLeaseBox, currentContract } from '@/components/UnitLease'
 import { contractClosed } from '@/lib/leaseActions'
+import { payStatusLabel } from '@/components/UnitReceipt'
 import { ActivityLeaseBox, activityPrefill, branchPrefill } from '@/components/ActivityLease'
 import { ActivityBranches, ActivityEditSheet, ActivityEmployees } from '@/components/ActivityParts'
 import { VehicleLeaseBox, vehicleLeaseMode, vehicleTermsTemplate } from '@/components/VehicleLease'
@@ -537,6 +538,34 @@ function AssetMenu({ asset, delegation, onEdit, onDone }: { asset: Asset; delega
 const SENSITIVE = /(كلمة|كلمات|سر|رمز|pin|pass|password|secret)/i
 
 // أنواع سجلات الأصل (ProjectAssetsRepository.kind*).
+/** تاريخ «17/10/2026» أو «2026-10-17» (parseFollowDate / _parseFlexibleDate). */
+function flexDate(raw: unknown): Date | null {
+  const text = typeof raw === 'string' ? raw.trim() : ''
+  if (!text) return null
+  const parts = text.split(/[/\-.\s]+/).map((x) => parseInt(x, 10))
+  if (parts.length < 3 || parts.slice(0, 3).some((n) => !Number.isFinite(n))) return null
+  const [a, b, c] = parts
+  return text.match(/^\d{4}/) ? new Date(a, b - 1, c) : new Date(c, b - 1, a)
+}
+const todayStart = () => {
+  const d = new Date()
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate())
+}
+/** _docsFollowUp: مستند انتهى أو ينتهي خلال 30 يومًا. */
+const docNeedsAttention = (e: AssetEntry) => {
+  const d = flexDate((e.data ?? {})['تاريخ الانتهاء'])
+  return !!d && (d.getTime() - todayStart().getTime()) / 86_400_000 <= 30
+}
+/** _followUpNeedsAttention: بند متابعة حان وقته أو تأخّر ولم يُنجز. */
+const followNeedsAttention = (e: AssetEntry) => {
+  const data = (e.data ?? {}) as Record<string, unknown>
+  if (!('نوع المتابعة' in data)) return false
+  const state = String(data['الحالة'] ?? '').trim()
+  if (state.includes('مكتمل') || state.includes('منجز') || state.includes('ملغ') || state === 'تم') return false
+  const d = flexDate(data['التاريخ'])
+  return !!d && d.getTime() <= todayStart().getTime()
+}
+
 const KINDS: [string, string][] = [
   ['contract', 'العقود'],
   ['rental', 'دفعات الإيجار'],
@@ -582,7 +611,15 @@ function AssetRecords({ asset, delegation, onChanged }: { asset: Asset; delegati
         <>
           <div className="no-scrollbar -mx-1 flex gap-2 overflow-x-auto px-1 pb-2">
             {kinds.map(([k, label]) => (
-              <Chip key={k} active={active === k} label={label} count={mine.filter((e) => e.kind === k).length} onClick={() => setKind(k)} />
+              <Chip
+                key={k}
+                active={active === k}
+                label={label}
+                count={mine.filter((e) => e.kind === k).length}
+                // نقطة حمراء: مستند منتهٍ أو قريب الانتهاء، أو متابعة حان وقتها.
+                dot={k === 'document' ? mine.some((e) => e.kind === k && docNeedsAttention(e)) : k === 'rental' ? mine.some((e) => e.kind === k && followNeedsAttention(e)) : false}
+                onClick={() => setKind(k)}
+              />
             ))}
           </div>
           <div className="flex flex-col gap-2 rounded-inner bg-surface p-2">
@@ -923,7 +960,8 @@ function UnitSheet({
         {unit.name || t(unit.type)}
       </h3>
       <div className="mt-3">
-        <InfoRow label="الحالة" value={t(unit.status)} />
+        {/* المسودة حالة الإيجار لا حالة الوحدة: «حالة الإيجار: مسودة». */}
+        {contract?.status === 'pending' && !contractClosed(contract) ? <InfoRow label="حالة الإيجار" value={t('مسودة')} /> : <InfoRow label="الحالة" value={t(unit.status)} />}
         {unitInfoRows(unit).map(([k, v]) => (
           <InfoRow key={k} label={k} value={v} />
         ))}
@@ -993,12 +1031,17 @@ function AssetContracts({ asset, delegation }: { asset: Asset; delegation: Deleg
   const payments = usePagePayments()
   const mine = (contracts.data ?? []).filter((c) => c.asset_id === asset.id)
   if (!mine.length) return null
+  // نقطة حمراء: مستحق مالي (مستحقة أو متأخرة) على عقد قائم معتمد (_isCurrentDue).
+  const hasDue = mine.some(
+    (c) => c.status !== 'pending' && !contractClosed(c) && (payments.data ?? []).some((p) => p.contract_id === c.id && ['مستحقة', 'متأخرة'].includes(payStatusLabel(p))),
+  )
   return (
     <div className="mt-5">
       <p className="mb-2 flex items-center gap-2 text-[14px] font-extrabold text-title">
         <span className="h-4 w-1 rounded-full bg-gold" />
         {t('عقود الإيجار')}
         <span className="rounded-full bg-surface px-2 text-[11px] text-sub">{mine.length}</span>
+        {hasDue && <span data-dot="" title={t('مستحقات')} className="size-2.5 rounded-full bg-danger" />}
       </p>
       {done && (
         <p className="mb-2 flex items-center gap-2 rounded-inner bg-brand-soft px-3 py-2 text-[12.5px] font-bold text-brand">

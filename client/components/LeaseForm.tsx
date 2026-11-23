@@ -9,6 +9,7 @@ import { ACTIVITY_UNIT_KEY, activityMetaFromLease, activityReminders, createActi
 import { errorText, supabase } from '@/lib/supabase'
 import { AssetError } from '@/lib/assetWrite'
 import { VEHICLE_UNIT_KEY, setVehicleTenant, splitLogs } from '@/lib/vehicleWrite'
+import { discardDraftContract } from '@/lib/leaseActions'
 import { AREA_UNIT_KEY, INNER_FACILITIES_KEY, METER_FIELDS, setUnitStatus, setUnitsStatus, unitKey, type PropertyUnit } from '@/lib/propertyWrite'
 import {
   ACTIVITY_REMINDERS,
@@ -124,6 +125,8 @@ function initialLease(asset: Asset | undefined, unit: PropertyUnit | undefined, 
   if (!existing && renewal) {
     const oldNo = (l.contract[K.newNo] ?? '').trim()
     for (const key of [K.startDate, K.endDate, K.newNo, K.signedAt, K.signedBy]) delete l.contract[key]
+    delete l.signature
+    delete l.stamp
     if (oldNo) l.contract[K.oldNo] = oldNo
     l.payments = []
     l.adminFees = []
@@ -256,6 +259,26 @@ export function LeaseForm({
   const leasePrint = useLeasePrint()
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  // «إلغاء المسودة» (_discardDraft): للعقد المحفوظ مسودة إذا فُتح للإكمال.
+  const openDraft = !!existing && existing.status === 'pending'
+  const [discarding, setDiscarding] = useState(false)
+  const [discardError, setDiscardError] = useState('')
+  async function discardDraft() {
+    if (!existing) return
+    setBusy(true)
+    setDiscardError('')
+    try {
+      const keys = await discardDraftContract(existing)
+      if (!activity && !vehicle) await setUnitsStatus(existing.asset_id, keys, 'شاغرة').catch(() => {})
+      await Promise.all(['assets', 'unit-contracts', 'unit-payments'].map((k) => qc.invalidateQueries({ queryKey: [k] })))
+      setDiscarding(false)
+      onDone('أُلغيت المسودة')
+    } catch (e) {
+      setDiscardError(`${t('تعذّر إلغاء المسودة. حاول مرة أخرى.')} ${errorText(e)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
   // نشاط أُنشئ ثم تعذّر حفظ عقده: لا يُنشأ مرة ثانية.
   const [createdId, setCreatedId] = useState('')
   const tot = totals(lease)
@@ -581,6 +604,8 @@ export function LeaseForm({
       update((l) => {
         delete l.contract[K.signedAt]
         delete l.contract[K.signedBy]
+        delete l.signature
+        delete l.stamp
       })
       setReview({ draft: true })
     } else setSigning(true)
@@ -593,9 +618,19 @@ export function LeaseForm({
         const now = new Date()
         l.contract[K.signedAt] = `${now.getDate()}/${now.getMonth() + 1}/${now.getFullYear()}`
         l.contract[K.signedBy] = [sign && 'توقيع', stamp && 'ختم'].filter(Boolean).join(' و')
+        // التوقيع والختم المختاران داخل العقد نفسه: يصل موقَّعًا لمن يُشارَك معه.
+        const d = store.data ?? {}
+        const strokes = sign ? signatureStrokes(d['user_signature_strokes_v1']) : []
+        const stampImage = stamp && typeof d['user_stamp_image_v1'] === 'string' ? (d['user_stamp_image_v1'] as string) : ''
+        if (strokes.length) l.signature = JSON.stringify(strokes)
+        else delete l.signature
+        if (stampImage) l.stamp = stampImage
+        else delete l.stamp
       } else {
         delete l.contract[K.signedAt]
         delete l.contract[K.signedBy]
+        delete l.signature
+        delete l.stamp
       }
     })
     setReview({ draft: false })
@@ -971,6 +1006,11 @@ export function LeaseForm({
         <div className="border-t border-line bg-white px-4 py-3">
           {error && <p className="mb-2 whitespace-pre-line rounded-inner bg-danger-soft px-3 py-2 text-[12px] font-bold text-danger">{t(error)}</p>}
           <div className="flex gap-2">
+            {openDraft && (
+              <button type="button" disabled={busy} onClick={() => (setDiscardError(''), setDiscarding(true))} className="h-12 flex-1 rounded-field border border-danger text-[14px] font-extrabold text-danger disabled:opacity-60">
+                {t('إلغاء المسودة')}
+              </button>
+            )}
             <button type="button" disabled={busy} onClick={() => startSave(true)} className="h-12 flex-1 rounded-field border border-gold text-[14px] font-extrabold text-gold-dark disabled:opacity-60">
               {t('حفظ كمسودة')}
             </button>
@@ -1013,6 +1053,17 @@ export function LeaseForm({
           }}
         />
       )}
+      <Confirm
+        open={discarding}
+        title="إلغاء المسودة"
+        message={t('ستُحذف هذه المسودة وما فيها من دفعات، وتعود الوحدة شاغرة. لا يمكن التراجع. هل تريد إلغاء المسودة؟')}
+        confirmLabel="إلغاء المسودة"
+        danger
+        busy={busy}
+        error={discardError}
+        onConfirm={discardDraft}
+        onCancel={() => setDiscarding(false)}
+      />
       {taxAsk && (
         <Confirm
           open
@@ -1135,7 +1186,7 @@ function DirectoryPicker({ onClose, onPick }: { onClose: () => void; onPick: (na
 }
 
 /** _editRow: سطر تأمين أو دفعة أو رسم. */
-function RowEditor({ list, initial, number, onClose, onSave }: { list: 'deposits' | 'payments' | 'adminFees'; initial?: Row; number: number; onClose: () => void; onSave: (row: Row, another: boolean) => void }) {
+export function RowEditor({ list, initial, number, onClose, onSave }: { list: 'deposits' | 'payments' | 'adminFees'; initial?: Row; number: number; onClose: () => void; onSave: (row: Row, another: boolean) => void }) {
   const { t } = useI18n()
   const fields = list === 'deposits' ? DEPOSIT_FIELDS : list === 'payments' ? PAYMENT_FIELDS : ADMIN_FEE_FIELDS
   const addLabel = list === 'deposits' ? 'تسجيل تأمين' : list === 'payments' ? 'تسجيل دفعة' : 'تسجيل رسم إداري'

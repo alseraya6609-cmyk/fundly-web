@@ -328,6 +328,12 @@ function Body({ form, entry, onDone }: { form: SharedFormDef; entry?: Entry; onD
       return (
         <div key={f.label} className="col-span-2 rounded-inner bg-brand-soft px-3 py-2 text-[12.5px] font-bold text-brand">
           {t('المساهمة على الشخص')}: {people.length && total > 0 ? money(total / people.length, t(v.select['العملة'] || currency)) : '—'} · {t('عدد الدورات')}: {people.length}
+          {/* الجمعية: المستلم في كل دورة يأخذ إجمالي المساهمة كاملًا. */}
+          {people.length > 0 && total > 0 && (
+            <p className="mt-0.5 text-[11.5px] font-bold text-sub">
+              {t('يستلم كل عضو')} {money(total, t(v.select['العملة'] || currency))} {t('كاملًا في دوره')}
+            </p>
+          )}
         </div>
       )
     if (f.kind === 'collect')
@@ -447,7 +453,7 @@ function Body({ form, entry, onDone }: { form: SharedFormDef; entry?: Entry; onD
             type="button"
             onClick={() => {
               if (needsCollect) return setError('اختر طريقة تحصيل المبلغ أولًا')
-              if (needsTotal) return setError('أدخل إجمالي المساهمة على الكل أولًا')
+              if (needsTotal) return setError('أدخل إجمالي المساهمة أولًا')
               setError('')
               setPicking(true)
             }}

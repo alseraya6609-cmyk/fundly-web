@@ -35,6 +35,9 @@ export type Lease = {
   payments: Row[]
   adminFees: Row[]
   note: string
+  /** التوقيع (خطوط JSON) والختم (base64) كما كانا عند التوقيع — داخل العقد فيظهران عند أي طرف. */
+  signature?: string
+  stamp?: string
 }
 
 export const K = {
@@ -394,6 +397,8 @@ export function decodeLease(raw: string | null | undefined): Lease {
       payments: listOf(d.payments),
       adminFees: listOf(d.adminFees),
       note: d.note == null ? '' : String(d.note),
+      ...(typeof d.signature === 'string' && d.signature ? { signature: d.signature } : {}),
+      ...(typeof d.stamp === 'string' && d.stamp ? { stamp: d.stamp } : {}),
     }
   } catch {
     return { ...emptyLease(), note: text }
@@ -414,6 +419,8 @@ export function encodeLease(l: Lease): string {
     payments: l.payments,
     adminFees: l.adminFees,
     note: l.note,
+    ...(l.signature ? { signature: l.signature } : {}),
+    ...(l.stamp ? { stamp: l.stamp } : {}),
   })
 }
 
