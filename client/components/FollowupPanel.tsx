@@ -134,7 +134,8 @@ export function FollowupPanel({ entry, canWrite, onChanged }: { entry: Entry; ca
       <p className="mb-2 text-[14px] font-extrabold text-title">{t('المتابعة والتخطيط')}</p>
       {rows.length > 0 && (
         <div className="flex flex-col gap-2">
-          {rows.map((r, i) => (
+          {/* الأحدث أولًا: السجل يُلحق بآخره. */}
+          {[...rows].reverse().map((r, i) => (
             <div key={i} className="card-inner flex items-start justify-between gap-2 px-3 py-2">
               <div className="min-w-0">
                 <p className="text-[12.5px] font-extrabold text-ink">

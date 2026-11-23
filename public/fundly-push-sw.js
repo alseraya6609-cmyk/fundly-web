@@ -79,6 +79,11 @@ function notice(data, lang) {
   if (action === 'announcement') return [`${tr.announcement} — ${title}`, body]
   if (action === 'admin_message') return [`${tr.admin} — ${title}`, body]
   if (action === 'support') return [tr.support, title ? `«${title}»${body ? `: ${body}` : ''}` : body]
+  if (action === 'activity' && (note.kind === 'debt_payment' || note.kind === 'debt_payment_decision')) {
+    // سداد دين بانتظار الموافقة أو قرار الدائن عليه.
+    const amount = `${note.amount || ''} ${note.currency || ''}`.trim()
+    return [`${tr.activity} — ${title}`, `${who} — ${amount}`]
+  }
   if (action === 'activity') {
     const name = String(note.name || '').trim()
     return [`${tr.activity} — ${title}`, `${who}${name ? ` — «${name}»` : ''}`]

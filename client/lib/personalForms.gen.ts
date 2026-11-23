@@ -389,6 +389,16 @@ export const FORMS: Record<string, EntryForm> = {
         "display": "الرقم التعريفي للربط بالدين / السلفة"
       },
       {
+        "label": "يتطلب موافقة المالك",
+        "kind": "select",
+        "isPrimary": true,
+        "options": [
+          "نعم",
+          "لا"
+        ],
+        "display": "سداد الطرف الآخر يتطلب موافقة المالك"
+      },
+      {
         "label": "رقم الهاتف",
         "kind": "text",
         "isPrimary": true

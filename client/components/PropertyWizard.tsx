@@ -363,6 +363,8 @@ export function PropertyWizard({ onClose, onDone }: { onClose: () => void; onDon
         }
         side={side}
         footer={
+          // «اضغط هنا لإكمال عملية التسجيل» في الآخر فقط: بعد «التالي» وإضافة وحدة.
+          dataDone && units.length > 0 ? (
           <div>
             {units.length > 0 && (
               <p className="mb-1.5 text-[12px] font-bold text-sub">
@@ -373,6 +375,7 @@ export function PropertyWizard({ onClose, onDone }: { onClose: () => void; onDon
               {t('اضغط هنا لإكمال عملية التسجيل')}
             </button>
           </div>
+          ) : undefined
         }
       >
         {notice && <p className="mb-3 rounded-inner bg-brand-soft px-3 py-2 text-[12.5px] font-bold text-brand">{notice}</p>}

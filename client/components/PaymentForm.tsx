@@ -4,7 +4,7 @@ import { useI18n } from '@/lib/i18n'
 import { errorText } from '@/lib/supabase'
 import { money } from '@/lib/format'
 import type { Entry } from '@/lib/data'
-import { EntryError, addPayment, increaseDebt, remainingOf, validatePayment, type Me } from '@/lib/personalWrite'
+import { EntryError, addPayment, debtOtherParty, increaseDebt, remainingOf, validatePayment, type Me } from '@/lib/personalWrite'
 import { FileError } from '@/lib/files'
 import { ReceiptPicker } from './SharedDetails'
 import { Confirm } from './Confirm'
@@ -44,10 +44,11 @@ export function PaymentForm({ entry, currency, me, onClose, onDone }: { entry: E
     setBusy(true)
     setError('')
     try {
-      await addPayment(entry, input(), me)
+      const result = await addPayment(entry, input(), me)
       await qc.invalidateQueries({ queryKey: ['personal'] })
       setConfirming(false)
-      onDone('تم حفظ الدفعة بنجاح')
+      // دين مربوط يتطلب الموافقة: أُرسل للدائن ولم يُخصم بعد.
+      onDone(result === 'pending' ? `${t('أُرسلت الدفعة إلى')} ${debtOtherParty(entry.details ?? {}, me.fnd)} ${t('للموافقة — تُخصم من الدين بعد موافقته')}` : 'تم حفظ الدفعة بنجاح')
     } catch (e) {
       setError(e instanceof EntryError || e instanceof FileError ? e.message : errorText(e) || 'تعذر حفظ الدفعة. حاول مرة أخرى.')
     } finally {

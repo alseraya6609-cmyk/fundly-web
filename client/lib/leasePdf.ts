@@ -79,6 +79,60 @@ export type LeasePrintOptions = {
   org: { name: string; city: string; phone: string; email: string; logo: string | null }
   signature: [number, number][][]
   stamp: string
+  /** المرفقات (leaseAttachments) وروابط صور ما هو صورة منها. */
+  attachments?: LeaseAttachment[]
+}
+
+/** مرفق في العقد: بنده، واسمه للطباعة، ومساره، ورابط صورته إن كانت صورة. */
+export type LeaseAttachment = { section: string; name: string; path: string; url?: string }
+
+/** قيمة هي ملف مرفق: مسار الجوال أو اسم ملف مرفوع («1731…_الهوية.jpg»). */
+export function isFileValue(raw: string): boolean {
+  const v = (raw ?? '').trim()
+  return !v.includes('\n') && /\.[A-Za-z0-9]{2,5}$/.test(v) && (/[\\/]/.test(v) || /^\d{10,}_/.test(v))
+}
+
+/** المرفق باسمه فقط — بلا المسار ولا ختم الوقت ولا الامتداد. */
+export function fileShownName(raw: string): string {
+  let name = String(raw ?? '').split(/[\\/]/).pop()?.trim() ?? ''
+  name = name.replace(/^\d{10,}_/, '')
+  const dot = name.lastIndexOf('.')
+  if (dot > 0 && name.length - dot <= 6) name = name.slice(0, dot)
+  return name.trim()
+}
+
+export const isImageFile = (path: string) => /\.(jpe?g|png|webp)$/i.test(path.trim())
+
+/** _leaseAttachments: ملفات حقول العقد وأسطره، والمستندات المرفقة من «مستندات» الأصل. */
+export function leaseAttachments(data: Lease, docPaths: Record<string, string> = {}): LeaseAttachment[] {
+  const out: LeaseAttachment[] = []
+  const seen = new Set<string>()
+  const scan = (section: string, values: Row) => {
+    for (const [key, raw] of Object.entries(values ?? {})) {
+      const v = String(raw ?? '').trim()
+      if (!isFileValue(v) || seen.has(v)) continue
+      seen.add(v)
+      out.push({ section, name: `${key} — ${fileShownName(v)}`, path: v })
+    }
+  }
+  scan('بيانات العقد', data.contract)
+  scan('المؤجر', data.lessor)
+  scan('المستأجر', data.tenant)
+  scan('ممثل المستأجر', data.representative)
+  scan('الرخصة', data.license)
+  scan('العين المؤجرة', data.property)
+  for (const row of data.payments) scan('الدفعات', row)
+  for (const row of data.deposits) scan('التأمين', row)
+  for (const row of data.adminFees) scan('الرسوم الإدارية', row)
+  for (const line of (data.contract['المستندات المرفقة'] ?? '').split('\n')) {
+    const name = line.trim()
+    if (!name) continue
+    const path = (docPaths[name] ?? '').trim()
+    if (path && seen.has(path)) continue
+    if (path) seen.add(path)
+    out.push({ section: 'المستندات المرفقة', name, path })
+  }
+  return out
 }
 
 const esc = (input: string) =>
@@ -126,12 +180,12 @@ function pairsOf(values: Row, specs: FieldSpec[]): [string, string][] {
     seen.add(spec.key)
     const value = (values[spec.key] ?? '').trim()
     if (!value) continue
-    out.push([spec.label, spec.date ? showDate(value) : value])
+    out.push([spec.label, isFileValue(value) ? fileShownName(value) : spec.date ? showDate(value) : value])
   }
   for (const [key, raw] of Object.entries(values)) {
     if (seen.has(key) || INTERNAL.has(key)) continue
     if (key.startsWith('__') || !String(raw ?? '').trim()) continue
-    out.push([key === K.mobile ? K.phone : key, showDate(String(raw))])
+    out.push([key === K.mobile ? K.phone : key, isFileValue(String(raw)) ? fileShownName(String(raw)) : showDate(String(raw))])
   }
   return out
 }
@@ -320,6 +374,19 @@ export function buildLeaseHtml(data: Lease, o: LeasePrintOptions): string {
     )
   }
 
+  // ---------- المرفقات: جدول بأسمائها، وصورها ملحقة بعد التوقيع ----------
+  const attachments = o.attachments ?? []
+  if (attachments.length) {
+    sec(
+      'المرفقات',
+      table(
+        ['#', 'المرفق', 'البند'],
+        attachments.map((a, i) => [String(i + 1), a.name, o.t(a.section)]),
+        new Set<number>(),
+      ),
+    )
+  }
+
   // ---------- البنود (عقد المركبة وحده) ----------
   if (vehicle) {
     const start = showDate(cv(K.startDate))
@@ -350,6 +417,13 @@ export function buildLeaseHtml(data: Lease, o: LeasePrintOptions): string {
     `<div class="signs">${box('الطرف الأول — المؤجر', (data.lessor[K.name] ?? '').trim(), true)}${box(vehicle ? 'الطرف الثاني — المستأجر' : 'الطرف الثاني — المستأجر / ممثله', (data.tenant[K.name] ?? '').trim(), false)}</div>`,
     `<p class="signed-note">${T('حُرّر هذا العقد من نسختين، بيد كل طرف نسخة للعمل بموجبها.')}</p>`,
   )
+  const images = attachments.filter((a) => a.url)
+  if (images.length) {
+    sec(
+      'صور المرفقات',
+      images.map((a) => `<figure class="att"><figcaption>${esc(a.name)}</figcaption><img src="${esc(a.url!)}" alt=""></figure>`).join(''),
+    )
+  }
 
   // ---------- الترويسة ----------
   const issued = parseDate(cv(K.startDate)) ?? new Date()
@@ -457,5 +531,8 @@ display:inline-flex;align-items:center;justify-content:center;flex:none;}
 .stamp img{max-width:78px;max-height:78px;object-fit:contain;}
 .stamp .ring{width:70px;height:70px;border-radius:50%;border:1px solid #B9CBC7;display:flex;align-items:center;justify-content:center;font-size:9px;color:#8C9A97;}
 .signed-note{text-align:center;font-size:10.5px;color:#5C6B68;margin-top:10px;}
+.att{margin:8px 0 14px;break-inside:avoid;text-align:center;}
+.att figcaption{font-size:11px;font-weight:700;color:#022E2A;margin-bottom:4px;}
+.att img{max-width:100%;max-height:330px;object-fit:contain;border:1px solid #E1E9E6;border-radius:6px;}
 .foot{margin-top:18px;padding-top:6px;border-top:1px solid #D8E3E0;font-size:8.5px;color:#8C9A97;}
 `

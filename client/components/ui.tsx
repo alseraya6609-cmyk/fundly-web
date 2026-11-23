@@ -233,7 +233,7 @@ export function InfoRow({ label, value, ltr = false }: { label: string; value: R
   return (
     <div className="flex items-start justify-between gap-4 border-b border-line py-3 last:border-0">
       <span className="shrink-0 text-[13px] text-muted">{t(label)}</span>
-      <span className={cn('text-end text-[14px] font-semibold text-ink', ltr && 'ltr')}>{value}</span>
+      <span className={cn('whitespace-pre-line text-end text-[14px] font-semibold text-ink', ltr && 'ltr')}>{value}</span>
     </div>
   )
 }

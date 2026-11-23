@@ -471,6 +471,7 @@ function FormBody({
   link,
   newCourse = false,
   copyFrom,
+  medicineNumber,
   onDone,
   onAnother,
 }: {
@@ -482,6 +483,8 @@ function FormBody({
   newCourse?: boolean
   /** دواء آخر من نفس الوصفة: يُنسخ منه، ويُحفظ سجلًا جديدًا. */
   copyFrom?: Entry
+  /** رقم الدواء في الوصفة: «دواء آخر (رقم 2)». */
+  medicineNumber?: number
   onDone: (message: string) => void
   onAnother?: (saved: Entry) => void
 }) {
@@ -572,7 +575,7 @@ function FormBody({
           : entry
             ? `${t('تعديل بيانات')} ${t(form.label)}`
             : copyFrom
-              ? t('دواء آخر من نفس الوصفة')
+              ? `${t('دواء آخر')} (${t('رقم')} ${medicineNumber ?? 2})`
               : `${t('إضافة')} ${t(form.label)}`}
       </p>
       <p className="mt-0.5 text-[12px] text-muted">{t(form.subtitle)}</p>
@@ -701,24 +704,6 @@ function MedicineSaveConfirm({ busy, error, onPick, onCancel }: { busy: boolean;
             {t('تأكيد')}
           </button>
         </div>
-      </div>
-    </div>
-  )
-}
-
-/** بعد حفظ الدواء واختيار «إضافة دواء آخر»: تنبيه بما سيحدث ثم النموذج (_offerSamePrescription). */
-function SamePrescriptionNotice({ saved, onContinue }: { saved: Entry; onContinue: () => void }) {
-  const { t } = useI18n()
-  return (
-    <div className="fixed inset-0 z-[60] grid place-items-center bg-brand-deep/40 p-4" onClick={onContinue}>
-      <div role="alertdialog" aria-modal="true" onClick={(e) => e.stopPropagation()} className="w-full max-w-sm rounded-card bg-white p-5 shadow-2xl">
-        <p dir="auto" className="text-[17px] font-extrabold text-title">
-          {t('تم حفظ')} «{saved.title}»
-        </p>
-        <p className="mt-2 text-[13px] leading-relaxed text-sub">{t('الدواء الآخر سيتم بنفس المعلومات السابقة للدواء، فأرجو التعديل.')}</p>
-        <button type="button" onClick={onContinue} className="mt-5 h-11 w-full rounded-field bg-brand text-[14px] font-extrabold text-white hover:bg-brand-dark">
-          {t('متابعة')}
-        </button>
       </div>
     </div>
   )
@@ -866,12 +851,13 @@ export function PersonalEditor({
   const { hidden } = useSession()
   const [type, setType] = useState<string | null>(null)
   // سلسلة «إضافة دواء آخر من نفس الوصفة»: آخر دواء حُفظ، ثم نموذج منسوخ منه.
-  const [savedMedicine, setSavedMedicine] = useState<Entry | null>(null)
+  // بلا تنبيه بينهما: صفحة «دواء آخر (رقم N)» مباشرة، والاسم والجرعة فارغان.
   const [copyFrom, setCopyFrom] = useState<Entry | null>(null)
+  const [medicineNumber, setMedicineNumber] = useState(1)
   useEffect(() => {
     if (open) setType(entry ? entry.entry_type : (startType ?? null))
-    setSavedMedicine(null)
     setCopyFrom(null)
+    setMedicineNumber(1)
   }, [open, entry, startType])
   const form = type ? FORMS[type] : null
   const Back = dir === 'rtl' ? ChevronRight : ChevronLeft
@@ -901,18 +887,13 @@ export function PersonalEditor({
             link={link}
             newCourse={newCourse}
             copyFrom={copyFrom ?? undefined}
+            medicineNumber={medicineNumber}
             onDone={onSaved}
-            onAnother={setSavedMedicine}
+            onAnother={(saved) => {
+              setCopyFrom(saved)
+              setMedicineNumber((n) => n + 1)
+            }}
           />
-          {savedMedicine && (
-            <SamePrescriptionNotice
-              saved={savedMedicine}
-              onContinue={() => {
-                setCopyFrom(savedMedicine)
-                setSavedMedicine(null)
-              }}
-            />
-          )}
         </>
       ) : (
         <div>

@@ -1,13 +1,14 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
+import { useRequestLists, type RequestCardItem } from '@/lib/requestsList'
 import { useQueryClient } from '@tanstack/react-query'
-import { Check, CheckCircle2, ChevronDown, Inbox, Megaphone, ReceiptText, Smartphone, UserRound, X } from 'lucide-react'
+import { Check, CheckCircle2, ChevronDown, ChevronLeft, FileCheck2, Inbox, Megaphone, Send, ReceiptText, Smartphone, UserRound, X } from 'lucide-react'
 import { useI18n } from '@/lib/i18n'
 import { useSession } from '@/lib/session'
 import { inboxText, useInbox, useStore, type InboxItem } from '@/lib/data'
 import { date } from '@/lib/format'
 import { canRespond, isInfo, markSeen, publicName, requestDetails, respond } from '@/lib/requestsWrite'
-import { Empty, ErrorBox, IconBadge, InfoRow, Loading, PageHeader } from '@/components/ui'
+import { Chip, Empty, ErrorBox, IconBadge, InfoRow, Loading, PageHeader, SectionTitle } from '@/components/ui'
 import { Confirm } from '@/components/Confirm'
 
 /*
@@ -166,11 +167,39 @@ function RequestCard({ item, onDone }: { item: InboxItem; onDone: (message: stri
   )
 }
 
+/** بطاقة «بانتظار اعتمادك» أو «أرسلتها بانتظار الرد»: تفتح السجل نفسه. */
+function LinkCard({ item, sent }: { item: RequestCardItem; sent: boolean }) {
+  const { t } = useI18n()
+  return (
+    <Link to={item.to} className="card flex items-center gap-3 p-4 hover:ring-1 hover:ring-brand">
+      <IconBadge icon={sent ? Send : FileCheck2} color={sent ? '#8C9A97' : '#0E7161'} size={42} />
+      <div className="min-w-0 flex-1">
+        <p dir="auto" className="truncate text-[14px] font-extrabold text-ink">
+          {item.title}
+        </p>
+        <p className="mt-0.5 text-[12.5px] font-bold text-sub">
+          {t(item.label)} <bdi>{item.value}</bdi>
+        </p>
+        {item.at && <p className="mt-0.5 text-[11px] text-muted">{date(item.at)}</p>}
+      </div>
+      <ChevronLeft className="size-4 shrink-0 text-muted ltr:rotate-180" />
+    </Link>
+  )
+}
+
 export default function Requests() {
   const { t } = useI18n()
   const inbox = useInbox()
   const items = inbox.data ?? []
   const [notice, setNotice] = useState('')
+  const lists = useRequestLists()
+  // تصنيف أعلى الصفحة: الكل، بانتظار قبولي (ما أرد عليه وما أعتمده)، بانتظار قبول الآخرين.
+  const [filter, setFilter] = useState<'all' | 'mine' | 'others'>('all')
+  const mineInbox = items.filter((i) => canRespond(i))
+  const shownInbox = filter === 'all' ? items : filter === 'mine' ? mineInbox : []
+  const mineCount = mineInbox.length + lists.approvals.length
+  const othersCount = lists.sent.length
+  const allCount = items.length + lists.approvals.length + lists.sent.length
 
   return (
     <div>
@@ -181,15 +210,43 @@ export default function Requests() {
           {t(notice)}
         </p>
       )}
+      <div className="no-scrollbar -mx-4 mb-3 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0">
+        <Chip active={filter === 'all'} label="الكل" icon={Inbox} count={allCount} onClick={() => setFilter('all')} />
+        <Chip active={filter === 'mine'} label="بانتظار قبولي" icon={FileCheck2} count={mineCount} onClick={() => setFilter('mine')} />
+        <Chip active={filter === 'others'} label="بانتظار قبول الآخرين" icon={Send} count={othersCount} onClick={() => setFilter('others')} />
+      </div>
+      {filter !== 'others' && lists.approvals.length > 0 && (
+        <>
+          <SectionTitle count={lists.approvals.length}>{t('بانتظار اعتمادك')}</SectionTitle>
+          <div className="mb-3 flex flex-col gap-2">
+            {lists.approvals.map((item) => (
+              <LinkCard key={item.key} item={item} sent={false} />
+            ))}
+          </div>
+        </>
+      )}
+      {filter !== 'mine' && lists.sent.length > 0 && (
+        <>
+          <SectionTitle count={lists.sent.length}>{t('أرسلتها بانتظار الرد')}</SectionTitle>
+          <div className="mb-3 flex flex-col gap-2">
+            {lists.sent.map((item) => (
+              <LinkCard key={item.key} item={item} sent />
+            ))}
+          </div>
+        </>
+      )}
+      {filter !== 'others' && shownInbox.length > 0 && (filter === 'mine' || lists.approvals.length > 0 || lists.sent.length > 0) && (
+        <SectionTitle count={shownInbox.length}>{t(filter === 'mine' ? 'بانتظار ردك' : 'الطلبات والردود')}</SectionTitle>
+      )}
       {inbox.isLoading ? (
         <Loading />
       ) : inbox.error ? (
         <ErrorBox error={inbox.error} />
-      ) : items.length === 0 ? (
-        <Empty icon={Inbox} text="لا توجد طلبات الآن" />
+      ) : shownInbox.length === 0 ? (
+        (filter === 'others' ? lists.sent.length === 0 : filter === 'mine' ? lists.approvals.length === 0 : lists.approvals.length + lists.sent.length === 0) && <Empty icon={Inbox} text="لا توجد طلبات الآن" />
       ) : (
         <div className="flex flex-col gap-2">
-          {items.map((item) => (
+          {shownInbox.map((item) => (
             <RequestCard
               key={item.id}
               item={item}

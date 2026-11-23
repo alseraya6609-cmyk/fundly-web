@@ -290,7 +290,7 @@ function ActivityContractSheet({ asset, contract, payments, currency, onClose }:
   }
   // «طباعة / مشاركة»: نموذج العقد المعتمد (printOrShareLeaseContract)، والعقد القديم بلا بيانات نصًّا.
   const leasePrint = useLeasePrint()
-  const print = () => (isEmpty ? printText(`عقد-${asset.title}`, text) : leasePrint.open({ lease, title: 'عقد إيجار النشاط التجاري', activity: true }))
+  const print = () => (isEmpty ? printText(`عقد-${asset.title}`, text) : leasePrint.open({ lease, title: 'عقد إيجار النشاط التجاري', activity: true, assetId: asset.id }))
   return (
     <div className="fixed inset-0 z-[55] flex items-end justify-center bg-brand-deep/40 sm:items-center sm:p-4" onClick={onClose}>
       <div role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()} className="flex h-[88vh] w-full flex-col overflow-hidden rounded-t-card bg-white shadow-2xl sm:max-w-2xl sm:rounded-card">

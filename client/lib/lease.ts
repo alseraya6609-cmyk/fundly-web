@@ -1,5 +1,5 @@
 import { supabase } from './supabase'
-import type { UnitContract, UnitPayment } from './data'
+import { docDisplayName, type UnitContract, type UnitPayment } from './data'
 import { AssetError, payExtra } from './assetWrite'
 import { changeReminders, type Reminder } from './reminders'
 import { upsertDirectoryPerson } from './peopleWrite'
@@ -609,7 +609,9 @@ export function shareText(l: Lease): string {
     const filled = Object.entries(values).filter(([, v]) => v.trim())
     if (!filled.length) return
     out.push(`— ${title} —`)
-    for (const [k, v] of filled) out.push(`${k === K.mobile ? K.phone : k}: ${v}`)
+    // المرفق باسمه فقط — بلا المسار الطويل ولا الامتداد.
+    const shown = (v: string) => (!v.includes('\n') && /\.[A-Za-z0-9]{2,5}$/.test(v.trim()) && (/[\\/]/.test(v) || /^\d{10,}_/.test(v.trim())) ? docDisplayName(v) : v)
+    for (const [k, v] of filled) out.push(`${k === K.mobile ? K.phone : k}: ${shown(v)}`)
     out.push('')
   }
   const t = totals(l)

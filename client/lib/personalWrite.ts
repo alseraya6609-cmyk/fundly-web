@@ -944,7 +944,78 @@ export function validatePayment(entry: Entry, input: PaymentInput): string | nul
   return null
 }
 
-export async function addPayment(entry: Entry, input: PaymentInput, me: Me) {
+// ---------------- سداد الدين بموافقة الدائن (_submitDebtPaymentForApproval) ----------------
+
+export const DEBT_REQUESTS_KEY = 'دفعات بانتظار الموافقة'
+export const DEBT_APPROVAL_FIELD = 'يتطلب موافقة المالك'
+export const DEBT_PENDING = 'بانتظار الموافقة'
+export const DEBT_APPROVED = 'تمت الموافقة'
+export const DEBT_REJECTED = 'مرفوضة'
+
+export function debtRequestsOf(details: Record<string, unknown>): Record<string, string>[] {
+  try {
+    const raw = details[DEBT_REQUESTS_KEY]
+    const list = typeof raw === 'string' ? JSON.parse(raw || '[]') : raw ?? []
+    return Array.isArray(list) ? list.filter((x) => x && typeof x === 'object').map((x) => Object.fromEntries(Object.entries(x).map(([k, v]) => [k, String(v ?? '')]))) : []
+  } catch {
+    return []
+  }
+}
+
+const pendingDebtTotal = (details: Record<string, unknown>) =>
+  debtRequestsOf(details)
+    .filter((r) => r['الحالة'] === DEBT_PENDING)
+    .reduce((s, r) => s + parseAmountInt(r['المبلغ'] ?? ''), 0)
+
+/** دين مربوط مقبول و«يتطلب موافقة المالك» ليس «لا»: سداد المدين يُرسل للموافقة. */
+export function debtPaymentNeedsApproval(details: Record<string, unknown>, me: string) {
+  if (String(details[DEBT_APPROVAL_FIELD] ?? '').trim() === 'لا') return false
+  if (assignmentOf(details).state !== 'مقبولة') return false
+  return !isDebtCreditor(details, me)
+}
+
+/** هل أنا الدائن (لـ«موافق / رفض»). */
+export const iAmDebtCreditor = (details: Record<string, unknown>, me: string) => isDebtCreditor(details, me)
+
+/** اسم الطرف الآخر في الدين المربوط. */
+export function debtOtherParty(details: Record<string, unknown>, me: string): string {
+  const d = (k: string) => String(details[k] ?? '').trim()
+  return roleFor(details, me) === 'holder' ? d('عهدة_مالك_الاسم') || d('عهدة_مالك_المعرّف') : d('عهدة_المسند_إليه_الاسم') || d('عهدة_مسندة_إلى')
+}
+
+/** الدائن يوافق (يُضاف إلى الدفعات ويُخصم) أو يرفض سدادًا أرسله المدين. */
+export async function decideDebtPayment(entry: Entry, requestId: string, approve: boolean, me: Me) {
+  if (!isDebtCreditor(entry.details ?? {}, me.fnd)) throw new EntryError('الموافقة على السداد للدائن وحده')
+  const n = new Date()
+  const stamp = `${dmy(n)} ${clockNow()}`
+  await mutateEntry(entry, (row, details) => {
+    const rows = debtRequestsOf(details)
+    const index = rows.findIndex((r) => r.id === requestId && r['الحالة'] === DEBT_PENDING)
+    if (index < 0) throw new EntryError('لم يعد هذا الطلب قائمًا')
+    const r = rows[index]
+    rows[index] = { ...r, الحالة: approve ? DEBT_APPROVED : DEBT_REJECTED, [approve ? 'تاريخ ووقت الاعتماد' : 'تاريخ ووقت الرفض']: stamp, قرّرها: me.name }
+    const next: Record<string, unknown> = { ...row.details, [DEBT_REQUESTS_KEY]: JSON.stringify(rows) }
+    if (approve) {
+      const amount = parseAmountInt(r['المبلغ'] ?? '')
+      if (amount > Math.round(Number(row.amount) || 0) - totalPaid(details)) throw new EntryError('المبلغ أكبر من المتبقي')
+      const payment: Record<string, unknown> = { الدافع: r['الدافع'] ?? '' }
+      if ((r['ملاحظات'] ?? '').trim()) payment['ملاحظات'] = r['ملاحظات'].trim()
+      payment['المبلغ'] = String(amount)
+      payment['التاريخ'] = r['التاريخ'] ?? ''
+      payment['وقت التسجيل'] = r['وقت التسجيل'] ?? ''
+      payment['سجّلها'] = r['الدافع'] ?? ''
+      payment['معرّف المسجِّل'] = r['معرّف الدافع'] ?? ''
+      payment['وافق عليها'] = me.name
+      payment['تاريخ ووقت الاعتماد'] = stamp
+      if ((r['مرفق الفاتورة'] ?? '').trim()) payment['مرفق الفاتورة'] = r['مرفق الفاتورة'].trim()
+      next[PAYMENTS_KEY] = prependJson(details[PAYMENTS_KEY] ?? '', payment)
+    }
+    return { details: next }
+  })
+}
+
+/** يعيد 'pending' إن أُرسل السداد لموافقة الدائن، و'saved' إن سُجّل. */
+export async function addPayment(entry: Entry, input: PaymentInput, me: Me): Promise<'pending' | 'saved'> {
   const problem = validatePayment(entry, input)
   if (problem) throw new EntryError(problem)
   const isDebt = entry.entry_type === 'دين / قرض / سلفة'
@@ -952,6 +1023,25 @@ export async function addPayment(entry: Entry, input: PaymentInput, me: Me) {
   const userId = await currentUserId()
   const invoicePath = input.invoice ? await uploadAttachment(userId, input.invoice) : ''
   const amount = Math.round(parseFloat(latin(input.amount.trim())))
+  if (isDebt && debtPaymentNeedsApproval(entry.details ?? {}, me.fnd)) {
+    const request: Record<string, unknown> = {
+      id: String(Date.now()),
+      المبلغ: String(amount),
+      العملة: String(entry.details?.['العملة'] ?? '').trim(),
+      التاريخ: input.date.trim(),
+      'وقت التسجيل': clockNow(),
+      الدافع: me.name,
+      'معرّف الدافع': me.fnd,
+    }
+    if (input.note.trim()) request['ملاحظات'] = input.note.trim()
+    if (invoicePath) request['مرفق الفاتورة'] = invoicePath
+    request['الحالة'] = DEBT_PENDING
+    await mutateEntry(entry, (row, details) => {
+      if (amount > Math.round(Number(row.amount) || 0) - totalPaid(details) - pendingDebtTotal(details)) throw new EntryError('المبلغ أكبر من المتبقي بعد الدفعات بانتظار الموافقة')
+      return { details: { ...row.details, [DEBT_REQUESTS_KEY]: prependJson(details[DEBT_REQUESTS_KEY] ?? '', request) } }
+    })
+    return 'pending'
+  }
   const payment: Record<string, unknown> = { الدافع: isDebt ? me.name : input.payer.trim() }
   if (isDebt && input.note.trim()) payment['ملاحظات'] = input.note.trim()
   payment['المبلغ'] = String(amount)
@@ -967,6 +1057,7 @@ export async function addPayment(entry: Entry, input: PaymentInput, me: Me) {
     if (invoicePath) patch.attachment_url = invoicePath
     return patch
   })
+  return 'saved'
 }
 
 /** «زيادة على الدين السابق»: يعيد الإجمالي الجديد. */

@@ -1182,6 +1182,7 @@ function LedgerView({
   onDecide: (kind: 'expense' | 'contribution', id: string, label: string, approve: boolean) => void
 }) {
   const { t } = useI18n()
+  // القوائم تُعرض الأحدث أولًا (تُحفظ ملحقة بآخرها).
   const all = expenses(details)
   const contribs = contributions(details)
   const settles = settlements(details)
@@ -1269,7 +1270,7 @@ function LedgerView({
 
       {all.length > 0 && (
         <Block title="المصروفات" count={all.length}>
-          {all.map((e) => (
+          {[...all].reverse().map((e) => (
             <div key={e.id} className="card-inner px-3 py-2 text-[12px]">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span dir="auto" className="font-bold text-ink">
@@ -1305,7 +1306,7 @@ function LedgerView({
 
       {contribs.length > 0 && (
         <Block title="المساهمات" count={contribs.length}>
-          {contribs.map((c) => (
+          {[...contribs].reverse().map((c) => (
             <div key={c.id} className="card-inner flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-[12px]">
               <span className="font-bold text-ink">{shown(c.member)}</span>
               <span className="text-muted">{c.date}</span>
@@ -1329,7 +1330,7 @@ function LedgerView({
 
       {settles.length > 0 && (
         <Block title="التسويات" count={settles.length}>
-          {settles.map((s) => (
+          {[...settles].reverse().map((s) => (
             <div key={s.id} className="card-inner flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-[12px]">
               <span dir="auto" className="text-ink">
                 <b>{shown(s.from)}</b> {t('دفع إلى')} <b>{shown(s.to)}</b>

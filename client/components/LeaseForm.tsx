@@ -675,7 +675,7 @@ export function LeaseForm({
       <div role="dialog" aria-modal="true" className="flex h-[96vh] w-full flex-col overflow-hidden rounded-t-card bg-page shadow-2xl sm:h-[92vh] sm:max-w-3xl sm:rounded-card">
         <div className="flex items-center justify-between gap-2 border-b border-line bg-white px-4 py-3">
           <p className="min-w-0 flex-1 text-[17px] font-extrabold text-title">{t(title)}</p>
-          <button type="button" onClick={() => leasePrint.open({ lease, title: printTitle, activity: !!activity, assetMeta: vehicleMeta })} aria-label={t('طباعة العقد')} title={t('طباعة العقد')} className="grid size-9 place-items-center rounded-full bg-surface text-brand">
+          <button type="button" onClick={() => leasePrint.open({ lease, title: printTitle, activity: !!activity, assetMeta: vehicleMeta, assetId: asset?.id })} aria-label={t('طباعة العقد')} title={t('طباعة العقد')} className="grid size-9 place-items-center rounded-full bg-surface text-brand">
             <Printer className="size-4" />
           </button>
           {leasePrint.ui}

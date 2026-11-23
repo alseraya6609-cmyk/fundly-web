@@ -1,14 +1,14 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { CalendarClock, Loader2, Pencil, Plus, RefreshCw, XCircle } from 'lucide-react'
+import { CalendarCheck2, CalendarClock, Loader2, Pencil, Plus, Printer, RefreshCw, XCircle } from 'lucide-react'
 import { cn, money } from '@/lib/format'
 import { useI18n } from '@/lib/i18n'
 import { useCurrency, type Asset, type UnitContract, type UnitPayment } from '@/lib/data'
 import { usePageContracts, usePagePayments } from '@/lib/delegatedAssets'
 import { errorText } from '@/lib/supabase'
 import { AssetError, payExtra } from '@/lib/assetWrite'
-import { setUnitStatus, unitKey, type PropertyUnit } from '@/lib/propertyWrite'
-import { contractNumber, maintBlocksLease, pretty, PAY } from '@/lib/lease'
+import { extensionLine, logExtension, setUnitStatus, unitKey, type PropertyUnit } from '@/lib/propertyWrite'
+import { contractNumber, decodeLease, K, maintBlocksLease, pretty, PAY } from '@/lib/lease'
 import {
   EXTEND_PRESETS,
   PAY_KINDS,
@@ -27,6 +27,7 @@ import {
   type ExtendBy,
 } from '@/lib/leaseActions'
 import type { Renewal } from './LeaseForm'
+import { leasePrintTitle, useLeasePrint } from './LeasePrint'
 import { Confirm } from './Confirm'
 import { SettleRent } from './SettleRent'
 import { InfoRow, Sheet } from './ui'
@@ -78,6 +79,9 @@ export function UnitLeaseBox({
   const [renewing, setRenewing] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const [paying, setPaying] = useState<UnitPayment | null>(null)
+  const leasePrint = useLeasePrint()
+  // «طباعة عقد الإيجار»: نموذج العقد المعتمد بمرفقاته، مباشرة من هنا.
+  const printLease = contract && Object.keys(decodeLease(contract.notes).contract).length ? decodeLease(contract.notes) : null
   const [editingPay, setEditingPay] = useState<{ existing: UnitPayment | null } | null>(null)
   const [notice, setNotice] = useState('')
   const [choosing, setChoosing] = useState(false)
@@ -126,6 +130,16 @@ export function UnitLeaseBox({
             {contract.status === 'pending' && editable && (
               <button type="button" onClick={() => onLease(contract)} className="mt-2 w-full rounded-inner bg-gold/15 px-3 py-2.5 text-start text-[12px] font-bold leading-relaxed text-gold-dark">
                 {t('هذا العقد محفوظ كمسودة لنقص بعض بياناته — اضغط هنا لإكماله وتأكيد حفظه.')}
+              </button>
+            )}
+            {printLease && (
+              <button
+                type="button"
+                onClick={() => leasePrint.open({ lease: printLease, title: leasePrintTitle(printLease), assetId: asset.id })}
+                className="mt-2 flex h-11 w-full items-center justify-center gap-1.5 rounded-field border border-brand text-[13px] font-extrabold text-brand hover:bg-brand-soft"
+              >
+                <Printer className="size-4" />
+                {t('طباعة عقد الإيجار')}
               </button>
             )}
             {editable && (
@@ -179,10 +193,13 @@ export function UnitLeaseBox({
           </div>
         </Sheet>
       )}
+      {leasePrint.ui}
       {extending && contract && (
         <ExtendFlow
           contract={contract}
+          unit={{ key: unitKey(unit), name: unit.name }}
           onClose={() => setExtending(false)}
+          onAddAmount={() => setEditingPay({ existing: null })}
           onDone={async (end) => {
             setExtending(false)
             await setUnitStatus(asset.id, unitKey(unit), 'مؤجرة').catch(() => {})
@@ -284,14 +301,60 @@ export function MonthsSheet({ title, hint, confirmLabel, options = RENEW_MONTHS,
   )
 }
 
-/** _pickExtension ← _confirmExtension ← _extendContract */
-export function ExtendFlow({ contract, onClose, onDone }: { contract: UnitContract; onClose: () => void; onDone: (end: Date) => void }) {
+/**
+  _pickExtension ← _confirmExtension ← _extendContract، ثم التمديد في «السجل»
+  (سجل العقار/الأصل وسجل الوحدة [unit]) ونافذة «أضف المبالغ الإضافية في
+  الحركات المالية» — و[onAddAmount] يفتح «إضافة دفعة» على العقد.
+*/
+export function ExtendFlow({
+  contract,
+  onClose,
+  onDone,
+  unit,
+  onAddAmount,
+}: {
+  contract: UnitContract
+  onClose: () => void
+  onDone: (end: Date) => void
+  unit?: { key: string; name: string }
+  onAddAmount?: () => void
+}) {
   const { t } = useI18n()
   const [custom, setCustom] = useState<'h' | 'd' | 'm' | null>(null)
   const [count, setCount] = useState('')
   const [by, setBy] = useState<ExtendBy | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [extended, setExtended] = useState<Date | null>(null)
+  const qc = useQueryClient()
+  if (extended) {
+    const finish = (add: boolean) => {
+      onDone(extended)
+      if (add) onAddAmount?.()
+    }
+    return (
+      <Sheet open onClose={() => finish(false)}>
+        <p className="flex items-center gap-2 text-[17px] font-extrabold text-title">
+          <CalendarCheck2 className="size-5 text-brand" />
+          {t('مُدِّد العقد حتى')} {extFmt(extended, false)}
+        </p>
+        <p className="mt-2 text-[13px] leading-relaxed text-body">
+          {t('سُجِّل التمديد في «السجل». إن كان للتمديد مبالغ إضافية (إيجار المدة الجديدة، رسوم…) فأضفها في «الحركات المالية».')}
+        </p>
+        <div className={cn('mt-4 grid gap-2', onAddAmount ? 'grid-cols-2' : 'grid-cols-1')}>
+          <button type="button" onClick={() => finish(false)} className="h-11 rounded-field border border-line text-[13.5px] font-extrabold text-sub hover:bg-surface">
+            {t(onAddAmount ? 'لاحقًا' : 'حسنًا')}
+          </button>
+          {onAddAmount && (
+            <button type="button" onClick={() => finish(true)} className="flex h-11 items-center justify-center gap-1.5 rounded-field bg-brand text-[13.5px] font-extrabold text-white hover:bg-brand-dark">
+              <Plus className="size-4" />
+              {t('إضافة مبلغ الآن')}
+            </button>
+          )}
+        </div>
+      </Sheet>
+    )
+  }
   if (by) {
     const plan = extendPlan(contract, by)
     return (
@@ -307,7 +370,12 @@ export function ExtendFlow({ contract, onClose, onDone }: { contract: UnitContra
           setBusy(true)
           setError('')
           try {
-            onDone(await extendContract(contract, by))
+            const end = await extendContract(contract, by)
+            // التمديد في «السجل»؛ تعذّر كتابته لا يُسقط التمديد نفسه.
+            const no = decodeLease(contract.notes).contract[K.newNo] ?? ''
+            await logExtension(contract.asset_id, unit?.key ?? null, extensionLine(no, extFmt(plan.from, plan.withTime), extFmt(plan.newEnd, plan.withTime), t), unit?.name ?? '').catch(() => {})
+            await qc.invalidateQueries({ queryKey: ['assets'] })
+            setExtended(end)
           } catch (e) {
             setError(e instanceof AssetError ? e.message : `${t('تعذر تمديد العقد')}: ${errorText(e)}`)
           } finally {

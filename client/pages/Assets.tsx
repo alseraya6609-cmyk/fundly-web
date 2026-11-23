@@ -42,6 +42,7 @@ import { ActivityLeaseBox, activityPrefill, branchPrefill } from '@/components/A
 import { ActivityBranches, ActivityEditSheet, ActivityEmployees } from '@/components/ActivityParts'
 import { VehicleLeaseBox, vehicleLeaseMode, vehicleTermsTemplate } from '@/components/VehicleLease'
 import { AnnexesBox, AssetPeopleBox } from '@/components/AssetExtras'
+import { AssetLogBox, UnitLogBox } from '@/components/LogBox'
 import { branchesOf, isBranch } from '@/lib/activityWrite'
 import { ACTIVITY_TYPES } from '@/lib/lease'
 import { splitLogs as splitAssetLogs } from '@/lib/vehicleWrite'
@@ -316,6 +317,7 @@ export default function Assets() {
               <AnnexesBox asset={open} vehicle={assetGroup(open.category) === 'equipment'} editable={!isCancelledAsset(open) && open.status !== ARCHIVED && canWrite(openDelegation)} onDone={flash} />
             )}
             <AssetPeopleBox asset={open} editable={!isCancelledAsset(open) && open.status !== ARCHIVED && !openDelegation} onDone={flash} />
+            <AssetLogBox asset={open} />
             <AssetContracts asset={open} delegation={openDelegation} />
             <AssetRecords asset={open} delegation={openDelegation} onChanged={(m) => (setParams({}), flash(m))} />
             <p className="mt-5 rounded-inner bg-surface px-4 py-3 text-[12px] text-sub">
@@ -941,6 +943,7 @@ function UnitSheet({
       )}
       {error && !archiving && <p className="mt-3 rounded-inner bg-danger-soft px-3 py-2 text-[12px] font-bold text-danger">{t(error)}</p>}
       <UnitLeaseBox asset={asset} unit={unit} editable={editable} onLease={onLease} onRenew={onRenew} onMulti={onMulti} onDone={onDone} />
+      <UnitLogBox unit={unit} />
       {cancelFirst && contract && (
         <CancelContractFlow
           asset={asset}

@@ -301,7 +301,7 @@ export function CustodyPanel({ entry, currency, me, onChanged }: { entry: Entry;
           <p className="text-[12.5px] font-extrabold text-gold-dark">
             {t('بانتظار الاعتماد')}: {pending.length}
           </p>
-          {pending.map(([row, index]) => (
+          {[...pending].reverse().map(([row, index]) => (
             <div key={index} className="card-inner flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-[12px]">
               <span className="font-bold text-ink">
                 {money(parseFloat(row['المبلغ']) || 0, t(currency))} · {row['الغرض']}

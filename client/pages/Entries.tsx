@@ -6,7 +6,7 @@ import { useI18n } from '@/lib/i18n'
 import { moduleHidden, useSession } from '@/lib/session'
 import { assignmentPendingLabel, currencyOf, custodyRole, useCommitmentExtras, useCurrency, usePersonal, useShared, useStore, type Entry } from '@/lib/data'
 import { MODULE_COLORS, PERSONAL_GROUPS, personalGroup, SHARED_GROUPS, sharedLabel } from '@/lib/catalog'
-import { date, matches, money } from '@/lib/format'
+import { date, matches, money, newestFirst, rowMoment } from '@/lib/format'
 import { Chip, Empty, ErrorBox, InfoRow, Loading, PageHeader, SearchField, SectionTitle, Sheet } from '@/components/ui'
 import { EntryCard } from '@/components/EntryCard'
 import { FileButton } from '@/components/FileButton'
@@ -18,6 +18,7 @@ import { publicName } from '@/lib/requestsWrite'
 import { IncreaseForm, PaymentForm } from '@/components/PaymentForm'
 import { CustodyPanel, SettleDialog } from '@/components/CustodyPanel'
 import { FollowupPanel } from '@/components/FollowupPanel'
+import { DebtRequests } from '@/components/DebtRequests'
 import { AlarmSettingsBox } from '@/components/Notifier'
 import { cancelDebt, custodyRemaining, isOwnerView, needsSettlement, settleBeforeDelete, settleCustody, type SettleMode } from '@/lib/custodyWrite'
 import { EntryError, MEDICATION_ACTIONS, logMedication } from '@/lib/personalWrite'
@@ -450,8 +451,9 @@ function EntryDetails({
     .slice(0, 40)
   // دفتر المشتركة (المصروفات والمساهمات والتسويات) يُعرض في SharedDetails.
   const ledgerKeys = page === 'shared' ? ['سجل المصروفات المشتركة', 'سجل المساهمات', 'سجل التسويات', 'مستندات'] : []
+  // كل سجل الأحدث أولًا؛ «سجل دفعات الالتزام» يُحفظ الأحدث أولًا وغيره يُلحق بآخره.
   const logs = LOGS.filter((key) => !ledgerKeys.includes(key))
-    .map((key) => [key, parseRows(entry.details?.[key])] as const)
+    .map((key) => [key, newestFirst(parseRows(entry.details?.[key]), rowMoment, key !== 'سجل دفعات الالتزام')] as const)
     .filter(([, rows]) => rows.length > 0)
   const x = extrasQ.data
 
@@ -735,13 +737,25 @@ function EntryDetails({
         <InfoRow label="التاريخ" value={date(entry.due_date)} />
         <InfoRow label="الحالة" value={(page === 'personal' && assignmentPendingLabel(entry, me.fnd, t)) || t(entry.status)} />
         {fields.map(([key, value]) => (
-          <InfoRow key={key} label={key} value={SENSITIVE.test(key) ? t('مخفية في الموقع') : String(value)} />
+          <InfoRow
+            key={key}
+            label={key}
+            value={
+              SENSITIVE.test(key)
+                ? t('مخفية في الموقع')
+                : // سجل بأسطر («سجل الزيادات»، «سجل الجرعات»): الأحدث في أول سطر.
+                  key.startsWith('سجل') && String(value).includes('\n')
+                  ? String(value).split('\n').reverse().join('\n')
+                  : String(value)
+            }
+          />
         ))}
         <InfoRow label="تاريخ الإضافة" value={date(entry.created_at)} />
         <InfoRow label="آخر تحديث" value={date(entry.updated_at)} />
       </div>
 
       {isCustody && <CustodyPanel entry={entry} currency={ownCurrency} me={me} onChanged={(m) => onChanged?.(m)} />}
+      {page === 'personal' && entry.entry_type === 'دين / قرض / سلفة' && <DebtRequests entry={entry} me={me} currency={ownCurrency} onChanged={(m) => onChanged?.(m)} />}
       {page === 'personal' && <FollowupPanel entry={entry} canWrite={editable && !['مؤرشف', 'محذوف'].includes(entry.status)} onChanged={(m) => onChanged?.(m)} />}
 
       {page === 'shared' && <SharedDetails details={entry.details ?? {}} entryType={entry.entry_type} currency={currency} entry={entry} onChanged={onChanged} />}

@@ -651,6 +651,16 @@ export function inboxText(item: InboxItem, t: (s: string) => string): string {
   if (action === 'accepted' || action === 'rejected')
     return `${who} ${t(action === 'accepted' ? 'قبِل' : 'رفضَ')} ${t(item.entry_type)}${title}`
   if (action === 'activity') {
+    const kind = String(note.kind ?? '')
+    const value = Number(note.amount ?? 0) || 0
+    const cur = String(note.currency ?? '').trim()
+    const amount = `${value % 1 === 0 ? value.toFixed(0) : value.toFixed(2)}${cur ? ` ${t(cur)}` : ''}`
+    // سداد دين أرسله المدين / قرار الدائن عليه (fundly_debt_payment_notices).
+    if (kind === 'debt_payment') {
+      const when = String(note.when ?? '').trim()
+      return `${t('أرسل')} ${who} ${t('إليك مبلغ')} ${amount}${when ? ` · ${when}` : ''} — ${t('بانتظار موافقتك')}${title}`
+    }
+    if (kind === 'debt_payment_decision') return `${who} ${t(String(note.status) === 'تمت الموافقة' ? 'وافق على سدادك' : 'رفض سدادك')} ${amount}${title}`
     const name = String(note.name ?? '').trim()
     return `${who} ${t('أضاف مصروفًا')}${name ? ` «${name}»` : ''}`
   }

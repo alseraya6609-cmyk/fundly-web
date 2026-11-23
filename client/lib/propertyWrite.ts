@@ -762,6 +762,48 @@ async function mutateUnit(assetId: string, key: string, change: (u: PropertyUnit
   throw new AssetError('تغيّرت البيانات أثناء الحفظ — أعد المحاولة')
 }
 
+/**
+  التمديد في «السجل» (_extendContract): سطر في سجل العقار/الأصل بتاريخه
+  وساعته، وفي سجل الوحدة ({type: extend, at, text}) إن كان لوحدة. المفوَّض
+  على وحدات بعينها يكتب سجل الوحدة وحده.
+*/
+export async function logExtension(assetId: string, unit: string | null, line: string, unitName = '') {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const fresh = await readFresh(assetId)
+    const patch: Record<string, unknown> = {}
+    if (unit) {
+      const all = decodeUnits(fresh.units_json)
+      const index = all.findIndex((u) => unitIsLive(u) && unitKey(u) === unit)
+      if (index >= 0) {
+        let rows: unknown[] = []
+        try {
+          const decoded = JSON.parse(all[index].extras[UNIT_LOG_KEY] ?? '[]')
+          if (Array.isArray(decoded)) rows = decoded
+        } catch {
+          rows = []
+        }
+        rows.push({ type: 'extend', at: dartNow(), text: line })
+        const next = [...all]
+        next[index] = { ...all[index], extras: { ...all[index].extras, [UNIT_LOG_KEY]: JSON.stringify(rows) } }
+        patch.units_json = encodeUnits(next)
+      }
+    }
+    if (!isUnitScoped(assetId)) {
+      const { meta, logs } = splitLogs(fresh.logs_json)
+      patch.logs_json = joinLogs(meta, [stamped(unitName ? `${line} — ${unitName}` : line), ...logs])
+    }
+    if (!Object.keys(patch).length) return
+    if (await writeGuarded(assetId, fresh.updated_at, patch)) return
+  }
+  throw new AssetError('تغيّرت البيانات أثناء الحفظ — أعد المحاولة')
+}
+
+/** سطر التمديد (_extensionLogLine): «تم تمديد العقد رقم 0012 من … إلى …». */
+export function extensionLine(number: string, from: string, to: string, tr: (s: string) => string = (s) => s) {
+  const no = number.trim()
+  return `${tr('تم تمديد العقد')}${no ? ` ${tr('رقم')} ${no}` : ''} ${tr('من')} ${from} ${tr('إلى')} ${to}`
+}
+
 /** حالة الوحدة بعد حفظ عقدها (_setUnitStatus): «مسودة» أو «مؤجرة». */
 export async function setUnitStatus(assetId: string, key: string, status: string) {
   let units: string | null = null

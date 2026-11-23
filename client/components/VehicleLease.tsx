@@ -191,7 +191,7 @@ export function VehicleLeaseBox({
         <span className="flex-1" />
         {lease ? (
           <>
-            <button type="button" onClick={() => leasePrint.open({ lease: decodeLease(contract.notes), title: `${t('عقد تأجير')} ${t(meta[EQ.vehicleClass] || VEHICLE_LAND)}`, assetMeta: meta })} className="rounded-inner border border-brand px-3 py-2 text-[12px] font-extrabold text-brand">
+            <button type="button" onClick={() => leasePrint.open({ lease: decodeLease(contract.notes), title: `${t('عقد تأجير')} ${t(meta[EQ.vehicleClass] || VEHICLE_LAND)}`, assetMeta: meta, assetId: contract.asset_id })} className="rounded-inner border border-brand px-3 py-2 text-[12px] font-extrabold text-brand">
               {t('طباعة العقد')}
             </button>
             <button type="button" onClick={() => onLease(contract)} className="flex items-center gap-1.5 rounded-inner bg-brand px-3.5 py-2 text-[12px] font-extrabold text-white">

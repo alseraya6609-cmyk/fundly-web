@@ -43,3 +43,42 @@ export function matches(query: string, ...fields: unknown[]): boolean {
   if (!q) return true
   return fields.some((f) => normalize(f).includes(q))
 }
+
+/**
+  لحظة سطر في السجل (_logMoment في التطبيق): التاريخ «17/10/2026» أو
+  «2026-10-17» أو «2026/10/17» أو ISO، ومعه الوقت «14:32» إن وُجد.
+*/
+export function logMoment(raw: unknown, time?: unknown): number | null {
+  const text = `${String(raw ?? '').trim()} ${String(time ?? '').trim()}`
+  const iso = /^\d{4}-\d{2}-\d{2}T/.test(text.trim()) ? Date.parse(text.trim()) : NaN
+  if (!Number.isNaN(iso)) return iso
+  const clock = text.match(/(\d{1,2}):(\d{2})/)
+  const ymd = text.match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})/)
+  const dmy = text.match(/(\d{1,2})[-/](\d{1,2})[-/](\d{4})/)
+  const parts = ymd ? [ymd[1], ymd[2], ymd[3]] : dmy ? [dmy[3], dmy[2], dmy[1]] : null
+  if (!parts) return null
+  const [y, m, d] = parts.map((x) => parseInt(x, 10))
+  return new Date(y, m - 1, d, clock ? parseInt(clock[1], 10) : 0, clock ? parseInt(clock[2], 10) : 0).getTime()
+}
+
+/**
+  صفوف السجل الأحدث أولًا (_newestFirst): بتاريخها ووقتها، وما تساوى أو بلا
+  تاريخ بترتيب الحفظ — [appended]: السجل يُلحق بآخره فيُعكس قبل الترتيب.
+*/
+export function newestFirst<T>(rows: T[], momentOf: (row: T) => number | null, appended = true): T[] {
+  const list = (appended ? [...rows].reverse() : [...rows]).map((row, i) => ({ row, i, at: momentOf(row) }))
+  list.sort((a, b) => {
+    if (a.at !== null && b.at !== null && a.at !== b.at) return b.at - a.at
+    if (a.at !== null && b.at === null) return -1
+    if (a.at === null && b.at !== null) return 1
+    return a.i - b.i
+  })
+  return list.map((x) => x.row)
+}
+
+/** وقت سطر السجل من مفاتيحه المعروفة. */
+export function rowMoment(row: Record<string, unknown>): number | null {
+  const date = row['التاريخ'] ?? row['date'] ?? row['at'] ?? row['تاريخ الدفع'] ?? row['من تاريخ'] ?? row['تاريخ التسليم'] ?? ''
+  const time = row['وقت التسجيل'] ?? row['الوقت'] ?? row['time'] ?? ''
+  return logMoment(date, time)
+}
