@@ -48,6 +48,10 @@ export default function People() {
     window.setTimeout(() => setNotice(''), 4000)
   }
 
+  // فئتا «الأفراد» و«الجهات» المخفيتان (من الإدارة أو «تخصيص الصفحات») لا تظهر ولا سجلاتها.
+  const peopleOff = hidden.has('category:people:الأفراد')
+  const entitiesOff = hidden.has('category:people:الجهات')
+  const shownPerson = (p: Person) => (isEntity(p) ? !entitiesOff : !peopleOff)
   const all = people.data ?? []
   const list = useMemo(
     () =>
@@ -55,11 +59,12 @@ export default function People() {
         .map((p, index) => ({ p, index }))
         .filter(
           ({ p }) =>
+            shownPerson(p) &&
             (filter === 'all' || (filter === 'entities') === isEntity(p)) &&
             matches(search, p.fullName, p.nickName, p.roleTitle, p.categoryName),
         )
         .sort((a, b) => Number(!!b.p.isPinned) - Number(!!a.p.isPinned)),
-    [all, filter, search],
+    [all, filter, search, peopleOff, entitiesOff],
   )
   const openIndex = params.get('open')
   const open = openIndex !== null ? all[Number(openIndex)] : undefined
@@ -138,9 +143,9 @@ export default function People() {
 
       <SectionTitle>{t('الفئات')}</SectionTitle>
       <div className="flex flex-wrap gap-2">
-        <Chip active={filter === 'all'} label="الكل" icon={LayoutGrid} count={all.length} onClick={() => setFilter('all')} />
-        <Chip active={filter === 'people'} label="الأفراد" icon={UserRound} count={all.filter((p) => !isEntity(p)).length} onClick={() => setFilter('people')} />
-        <Chip active={filter === 'entities'} label="الجهات" icon={Building} count={all.filter(isEntity).length} onClick={() => setFilter('entities')} />
+        <Chip active={filter === 'all'} label="الكل" icon={LayoutGrid} count={all.filter(shownPerson).length} onClick={() => setFilter('all')} />
+        {!peopleOff && <Chip active={filter === 'people'} label="الأفراد" icon={UserRound} count={all.filter((p) => !isEntity(p)).length} onClick={() => setFilter('people')} />}
+        {!entitiesOff && <Chip active={filter === 'entities'} label="الجهات" icon={Building} count={all.filter(isEntity).length} onClick={() => setFilter('entities')} />}
       </div>
 
       <SectionTitle count={list.length}>{t('الأفراد والجهات')}</SectionTitle>

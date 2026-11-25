@@ -135,7 +135,7 @@ export function leaseAttachments(data: Lease, docPaths: Record<string, string> =
   return out
 }
 
-const esc = (input: string) =>
+export const esc = (input: string) =>
   String(input ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -144,7 +144,7 @@ const esc = (input: string) =>
     .replace(/'/g, '&#39;')
 
 const two = (n: number) => String(n).padStart(2, '0')
-const dmy = (d: Date) => `${two(d.getDate())}/${two(d.getMonth() + 1)}/${d.getFullYear()}`
+export const dmy = (d: Date) => `${two(d.getDate())}/${two(d.getMonth() + 1)}/${d.getFullYear()}`
 
 /** _showDate: سنة-شهر-يوم ← يوم/شهر/سنة، وغيرها كما هي. */
 export function showDate(raw: string): string {
@@ -167,10 +167,10 @@ export function printMoney(value: number): string {
   return `${value < 0 ? '-' : ''}${out}.${frac}`
 }
 
-const rateLabel = (rate: number) => (rate === Math.round(rate) ? String(rate) : rate.toFixed(1))
+export const rateLabel = (rate: number) => (rate === Math.round(rate) ? String(rate) : rate.toFixed(1))
 
 const AR_NUMS = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩']
-const arNum = (n: number, rtl: boolean) => (rtl ? String(n).replace(/\d/g, (d) => AR_NUMS[+d]) : String(n))
+export const arNum = (n: number, rtl: boolean) => (rtl ? String(n).replace(/\d/g, (d) => AR_NUMS[+d]) : String(n))
 
 /** _pairsOf: حقول القسم بترتيبها ثم بقية المفاتيح غير الداخلية. */
 function pairsOf(values: Row, specs: FieldSpec[]): [string, string][] {
@@ -217,7 +217,7 @@ function propertySpecs(property: Row): FieldSpec[] {
 
 const ORDINALS = ['الأول', 'الثاني', 'الثالث', 'الرابع', 'الخامس', 'السادس', 'السابع', 'الثامن', 'التاسع', 'العاشر', 'الحادي عشر', 'الثاني عشر', 'الثالث عشر', 'الرابع عشر', 'الخامس عشر']
 
-function signatureSvg(strokes: [number, number][][]): string {
+export function signatureSvg(strokes: [number, number][][]): string {
   if (!strokes.length) return ''
   const xs = strokes.flat().map((p) => p[0])
   const ys = strokes.flat().map((p) => p[1])
@@ -229,7 +229,7 @@ function signatureSvg(strokes: [number, number][][]): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-6 -6 ${(w + 12).toFixed(1)} ${(h + 12).toFixed(1)}"><path d="${path}" fill="none" stroke="#0F2420" stroke-width="${(Math.max(w, h) / 70).toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"/></svg>`
 }
 
-const imageMime = (b64: string) => (b64.startsWith('/9j/') ? 'image/jpeg' : 'image/png')
+export const imageMime = (b64: string) => (b64.startsWith('/9j/') ? 'image/jpeg' : 'image/png')
 
 export function buildLeaseHtml(data: Lease, o: LeasePrintOptions): string {
   const T = (s: string) => esc(o.t(s))
@@ -460,7 +460,7 @@ export function buildLeaseHtml(data: Lease, o: LeasePrintOptions): string {
 }
 
 /* ألوان التطبيق: _deep 0A5A50، _gold C9A24A، _goldText 9A8040، _ink 16302B. */
-const LEASE_CSS = `
+export const LEASE_CSS = `
 @page{size:A4;margin:11mm 11mm 12mm;}
 *{box-sizing:border-box;margin:0;padding:0;}
 html,body{background:#fff;}

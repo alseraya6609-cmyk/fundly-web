@@ -50,6 +50,8 @@ import {
   contractNumbers,
   decodeLease,
   distribute,
+  ensureRowIds,
+  syncLeasePeople,
   fillPropertyFrom,
   includesAdminFees,
   isoDay,
@@ -117,10 +119,14 @@ export type Renewal = { notes: string | null; start: Date; end: Date; oldNo: str
 /** vehicle: عقد تأجير المركبة (_openEquipContractForm) — بيانات المركبة مكان العقار وبلا ممثل، و«شروط التأجير». */
 export type VehicleMode = { fields: string[]; values: Row; meta: Row; vehicleClass: string; template?: string }
 
-type Mode = { multi?: { key: string; name: string }[]; activity?: { prefill?: string }; vehicle?: VehicleMode }
+type Mode = { multi?: { key: string; name: string }[]; activity?: { prefill?: string }; vehicle?: VehicleMode; document?: LeaseDocument }
+
+/** عقد من «قوالب المستندات» (saveAsDocument): يُحفظ مستندًا لا عقد وحدة، وعملته تُختار له. */
+export type LeaseDocument = { title: string; prefill: string; currencies: string[]; save: (lease: Lease, draft: boolean) => Promise<void> }
+export const DOC_CURRENCY_KEY = 'العملة'
 
 function initialLease(asset: Asset | undefined, unit: PropertyUnit | undefined, existing: UnitContract | undefined, renewal: Renewal | undefined, mode: Mode): Lease {
-  const l = decodeLease(existing?.notes ?? renewal?.notes ?? mode.activity?.prefill ?? mode.vehicle?.template)
+  const l = decodeLease(existing?.notes ?? renewal?.notes ?? mode.document?.prefill ?? mode.activity?.prefill ?? mode.vehicle?.template)
   // التجديد: نسخة من السابق بلا تواريخه ورقمه وتوقيعه ودفعاته ورسومه.
   if (!existing && renewal) {
     const oldNo = (l.contract[K.newNo] ?? '').trim()
@@ -193,6 +199,7 @@ export function LeaseForm({
   multi,
   activity,
   vehicle,
+  document: doc,
   onClose,
   onDone,
 }: {
@@ -205,6 +212,7 @@ export function LeaseForm({
   /** branch: «إضافة فرع» لنشاط رئيسي (_addBranch) — يُنشأ الفرع من رخصته عند الحفظ. */
   activity?: { classOptions: string[]; prefill?: string; branch?: { parent: Asset; count: number } }
   vehicle?: VehicleMode
+  document?: LeaseDocument
   onClose: () => void
   onDone: (message: string) => void
 }) {
@@ -219,7 +227,7 @@ export function LeaseForm({
   const branch = !asset ? activity?.branch : undefined
   const propertyTitle = asset?.title ?? (branch ? `${t('فرع جديد لنشاط:')} ${branch.parent.title}` : 'نشاط تجاري جديد')
   const numbers = useMemo(() => contractNumbers((contracts.data ?? []).filter((c) => !!asset && c.asset_id === asset.id), key, existing), [contracts.data, asset, key, existing])
-  const [lease, setLease] = useState<Lease>(() => initialLease(asset, unit, existing, renewal, { multi, activity, vehicle }))
+  const [lease, setLease] = useState<Lease>(() => initialLease(asset, unit, existing, renewal, { multi, activity, vehicle, document: doc }))
   const [chosen, setChosen] = useState<string[]>([])
   const chosenList = (multi ?? []).filter((u) => chosen.includes(u.key))
   const [lines, setLines] = useState<string[]>(() => {
@@ -232,7 +240,7 @@ export function LeaseForm({
   // _fillContractNumbers: بعد تحميل العقود، مرة واحدة.
   const loaded = contracts.isSuccess
   useEffect(() => {
-    if (!loaded || existing) return
+    if (!loaded || existing || doc) return
     setLease((prev) => {
       const next = cloneLease(prev)
       const current = (next.contract[K.newNo] ?? '').trim()
@@ -583,7 +591,7 @@ export function LeaseForm({
     const end = parseDay(lease.contract[K.endDate])
     if (start && end && end.getTime() < start.getTime()) return setError('تاريخ نهاية العقد قبل تاريخ بدايته — صحّحه أولًا')
     if (isMulti && chosen.length < 2) return setError('اختر وحدتين على الأقل في «اختر الوحدات المشمولة»')
-    if (activity && !asset && !tradeName) return setError('اكتب الاسم التجاري في «بيانات الرخصة»')
+    if (activity && !asset && !doc && !tradeName) return setError('اكتب الاسم التجاري في «بيانات الرخصة»')
     const probe = cloneLease(lease)
     if (activity) {
       probe.license[K.activities] = lines.map((x) => x.trim()).filter(Boolean).join('\n')
@@ -642,6 +650,14 @@ export function LeaseForm({
     try {
       const draft = missingRequired(lease).length > 0 || markedDraft
       const l = cloneLease(lease)
+      if (doc) {
+        ensureRowIds(l)
+        await doc.save(l, draft)
+        await syncLeasePeople(l, doc.title).catch(() => {})
+        await qc.invalidateQueries({ queryKey: ['people'] })
+        onDone(draft ? 'حُفظت المسودة — افتحها من «النماذج المحفوظة» لإكمالها' : 'تم حفظ العقد')
+        return
+      }
       let assetId = asset?.id ?? createdId
       let createdTitle = ''
       if (!assetId && activity) {
@@ -696,7 +712,7 @@ export function LeaseForm({
     }
   }
 
-  const title = renewal ? 'تجديد العقد' : vehicle ? `${t('عقد تأجير')} ${t(vehicle.vehicleClass)}` : multi && !existing ? 'عقد متعدد الوحدات' : branch ? 'عقد إيجار الفرع' : activity ? 'عقد إيجار النشاط' : 'عقد الإيجار'
+  const title = doc ? doc.title : renewal ? 'تجديد العقد' : vehicle ? `${t('عقد تأجير')} ${t(vehicle.vehicleClass)}` : multi && !existing ? 'عقد متعدد الوحدات' : branch ? 'عقد إيجار الفرع' : activity ? 'عقد إيجار النشاط' : 'عقد الإيجار'
   const printTitle = activity ? title : leasePrintTitle(lease, false, title)
   const vehicleMeta = vehicle?.meta
   const payDue = (row: Row) => {
@@ -719,6 +735,21 @@ export function LeaseForm({
           </button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          {doc ? (
+            <div className="mb-3 rounded-card border border-line bg-white p-4">
+              <label className="flex flex-col gap-1">
+                <span className="text-[12px] font-bold text-sub">{t('العملة')}</span>
+                <select value={lease.contract[DOC_CURRENCY_KEY] ?? ''} onChange={(e) => update((l) => void (l.contract[DOC_CURRENCY_KEY] = e.target.value))} className={inputClass}>
+                  <option value="">—</option>
+                  {doc.currencies.map((c) => (
+                    <option key={c} value={c}>
+                      {t(c)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          ) : (
           <div className="mb-3 flex items-center gap-3 rounded-card border border-line bg-white p-4">
             <FileText className="size-6 text-brand" />
             <div className="min-w-0">
@@ -744,6 +775,7 @@ export function LeaseForm({
               ) : null}
             </div>
           </div>
+          )}
           {isMulti &&
             card(
               'اختر الوحدات المشمولة بالعقد *',

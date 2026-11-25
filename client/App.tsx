@@ -22,6 +22,8 @@ import Delegations from '@/pages/Delegations'
 import Support from '@/pages/Support'
 import NotFound from '@/pages/NotFound'
 import Landing from '@/pages/Landing'
+import Settings from '@/pages/Settings'
+import Templates from '@/pages/Templates'
 import { Maintenance, PolicyConsent, Splash, Suspended } from '@/pages/Gates'
 
 const queryClient = new QueryClient({
@@ -81,6 +83,10 @@ export default function App() {
                 <Route path="delegations" element={<Delegations />} />
                 <Route path="support" element={<Support />} />
                 <Route path="more" element={<More />} />
+                <Route path="templates" element={<Templates />} />
+                <Route path="settings" element={<Settings />} />
+                <Route path="settings/:section" element={<Settings />} />
+                <Route path="settings/:section/:page" element={<Settings />} />
                 <Route path="*" element={<NotFound />} />
               </Route>
             </Routes>

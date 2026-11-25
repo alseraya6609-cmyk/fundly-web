@@ -1,13 +1,14 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Bell, CalendarDays, ReceiptText, Check, Copy, Ellipsis, FileBarChart, FileText, Globe, LayoutDashboard, LifeBuoy, LogOut, ShieldCheck, Smartphone, Trash2, UserRound } from 'lucide-react'
+import { Bell, CalendarDays, ReceiptText, Check, Copy, Ellipsis, FileBarChart, FileText, Globe, LayoutDashboard, LifeBuoy, LogOut, PenLine, Settings, ShieldCheck, SlidersHorizontal, Smartphone, Trash2, UserRound } from 'lucide-react'
 import { LANGS, useI18n, type Lang } from '@/lib/i18n'
 import { WEB_VERSION, useSession } from '@/lib/session'
 import { useStore } from '@/lib/data'
 import { cn } from '@/lib/format'
-import { IconBadge, InfoRow, PageHeader, SectionTitle } from '@/components/ui'
+import { Chevron, IconBadge, InfoRow, PageHeader, SectionTitle } from '@/components/ui'
 import { SITE, StoreLinks } from './Gates'
 import { NotificationsCard } from '@/components/Notifier'
+import { imageSrc } from '@/lib/settingsWrite'
 
 /** اختيار اللغة — اللغات الخمس نفسها في التطبيق. */
 export function LanguagePicker({ compact = false }: { compact?: boolean }) {
@@ -60,6 +61,7 @@ export default function More() {
 
   const name = String(store.data?.['settings_profile_name'] ?? '').trim() || profile?.display_name || ''
   const phone = String(store.data?.['settings_profile_phone'] ?? '').trim() || profile?.phone || ''
+  const photo = String(store.data?.['settings_profile_photo'] ?? '')
 
   async function copyId() {
     if (!profile?.fnd_id) return
@@ -84,9 +86,13 @@ export default function More() {
 
       <div className="card p-5">
         <div className="flex items-center gap-3">
-          <IconBadge icon={UserRound} color="#0A5A50" size={56} solid />
+          <Link to="/settings/profile" aria-label={t('البيانات الشخصية')} className="shrink-0">
+            {photo ? <img src={imageSrc(photo)} alt="" className="size-14 rounded-full object-cover" /> : <IconBadge icon={UserRound} color="#0A5A50" size={56} solid />}
+          </Link>
           <div className="min-w-0 flex-1">
-            <p className="truncate text-[18px] font-extrabold text-title">{name || t('صاحب الحساب')}</p>
+            <Link to="/settings/profile" className="block truncate text-[18px] font-extrabold text-title hover:text-brand">
+              {name || t('صاحب الحساب')}
+            </Link>
             {profile?.fnd_id && (
               <button type="button" onClick={copyId} className="mt-0.5 flex items-center gap-1.5 text-[13px] font-bold text-gold-dark">
                 <span className="ltr">{profile.fnd_id}</span>
@@ -94,6 +100,11 @@ export default function More() {
               </button>
             )}
           </div>
+          <Link to="/settings" className="flex shrink-0 items-center gap-1 rounded-inner bg-brand-soft px-3 py-2 text-[12.5px] font-extrabold text-brand hover:bg-brand/15">
+            <Settings className="size-4" />
+            {t('الإعدادات')}
+            <Chevron className="size-3.5" />
+          </Link>
         </div>
         <div className="card-inner mt-4 px-4">
           <InfoRow label="البريد الإلكتروني" value={user?.email} ltr />
@@ -112,6 +123,10 @@ export default function More() {
             ['/delegations', 'التفويضات', ShieldCheck],
             ['/trash', 'سلة المهملات', Trash2],
             ['/support', 'إرسال بلاغ أو اقتراح', LifeBuoy],
+            ['/settings', 'الإعدادات', Settings],
+            ['/settings/pages', 'تخصيص الصفحات', SlidersHorizontal],
+            ['/settings/signature', 'التوقيع والختم والشعار', PenLine],
+            ['/templates', 'قوالب المستندات والايصالات', FileText],
           ] as const
         ).map(([to, label, Icon]) => (
           <Link key={to} to={to} className="card flex flex-col items-center gap-2 px-2 py-4 text-center hover:bg-line/70">

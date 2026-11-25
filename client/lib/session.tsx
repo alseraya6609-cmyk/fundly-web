@@ -37,7 +37,10 @@ type Ctx = {
   config: AppConfig | null
   account: AccountState | null
   policyAccepted: boolean
+  /** ما أخفته الإدارة وما أخفاه المستخدم في «تخصيص الصفحات» معًا. */
   hidden: Set<string>
+  /** ما أخفته الإدارة وحدها — لا يظهر في شاشات التخصيص. */
+  adminHidden: Set<string>
   signIn: (identifier: string, password: string) => Promise<void>
   adopt: (options?: { acceptPolicy?: boolean }) => Promise<void>
   signOut: () => Promise<void>
@@ -115,6 +118,41 @@ async function loadHidden(): Promise<Set<string>> {
   )
 }
 
+/**
+ * «تخصيص الصفحات» (PageCustomizationStore): page_custom_hidden_v1_<page> قائمة
+ * فئات، وعناصر بصيغة «الفئة › العنصر». تُحوَّل لمفاتيح الإدارة نفسها
+ * (category:page:الفئة و item:page:الفئة:العنصر) فتُطبَّق في كل مكان.
+ */
+export const PAGE_KEYS = ['personal', 'shared', 'people', 'assets'] as const
+export const pageCustomKey = (page: string) => `page_custom_hidden_v1_${page}`
+export const ITEM_SEP = ' › '
+
+async function loadUserHidden(user: User): Promise<Set<string>> {
+  const out = new Set<string>()
+  const { data } = await supabase
+    .from('fundly_user_store')
+    .select('key, value')
+    .eq('user_id', user.id)
+    .in('key', PAGE_KEYS.map(pageCustomKey))
+  for (const row of (data ?? []) as { key: string; value: string }[]) {
+    const page = row.key.replace('page_custom_hidden_v1_', '')
+    let list: unknown = []
+    try {
+      list = JSON.parse(row.value)?.v
+    } catch {
+      list = []
+    }
+    if (!Array.isArray(list)) continue
+    for (const raw of list) {
+      const key = String(raw)
+      const at = key.indexOf(ITEM_SEP)
+      if (at < 0) out.add(`category:${page}:${key}`)
+      else out.add(`item:${page}:${key.slice(0, at)}:${key.slice(at + ITEM_SEP.length)}`)
+    }
+  }
+  return out
+}
+
 async function loadProfile(user: User): Promise<Profile | null> {
   const { data } = await supabase
     .from('profiles')
@@ -131,7 +169,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [config, setConfig] = useState<AppConfig | null>(null)
   const [account, setAccount] = useState<AccountState | null>(null)
   const [policyAccepted, setPolicyAccepted] = useState(true)
-  const [hidden, setHidden] = useState<Set<string>>(new Set())
+  const [adminHidden, setAdminHidden] = useState<Set<string>>(new Set())
+  const [userHidden, setUserHidden] = useState<Set<string>>(new Set())
+  const hidden = useMemo(() => new Set([...adminHidden, ...userHidden]), [adminHidden, userHidden])
 
   const load = useCallback(async (current: User | null) => {
     const cfg = await loadConfig()
@@ -140,10 +180,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setProfile(null)
       setAccount(null)
       setPolicyAccepted(true)
-      setHidden(new Set())
+      setAdminHidden(new Set())
+      setUserHidden(new Set())
       return
     }
-    const [acc, prof, hid] = await Promise.all([loadAccount(current), loadProfile(current), loadHidden()])
+    const [acc, prof, hid, mine] = await Promise.all([loadAccount(current), loadProfile(current), loadHidden(), loadUserHidden(current).catch(() => new Set<string>())])
     if (acc?.forcedOut) {
       // أخرجته الإدارة من كل أجهزته: الدخول من جديد يجعل آخر دخول أحدث.
       await supabase.auth.signOut()
@@ -152,7 +193,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
     setAccount(acc?.state ?? { frozen: false, suspended: false, reason: '' })
     setProfile(prof)
-    setHidden(hid)
+    setAdminHidden(hid)
+    setUserHidden(mine)
     const version = cfg?.policy_version ?? ''
     if (!version) {
       setPolicyAccepted(true)
@@ -267,8 +309,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(() => load(user), [load, user])
 
   const value = useMemo<Ctx>(
-    () => ({ ready, user, profile, config, account, policyAccepted, hidden, signIn, adopt, signOut, acceptPolicy, refresh }),
-    [ready, user, profile, config, account, policyAccepted, hidden, signIn, adopt, signOut, acceptPolicy, refresh],
+    () => ({ ready, user, profile, config, account, policyAccepted, hidden, adminHidden, signIn, adopt, signOut, acceptPolicy, refresh }),
+    [ready, user, profile, config, account, policyAccepted, hidden, adminHidden, signIn, adopt, signOut, acceptPolicy, refresh],
   )
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>

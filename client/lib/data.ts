@@ -521,7 +521,7 @@ export function useStore() {
   })
 }
 
-function jsonList(value: unknown): unknown[] {
+export function jsonList(value: unknown): unknown[] {
   if (Array.isArray(value)) {
     // قائمة نصوص (setStringList): كل عنصر JSON مستقل.
     return value
