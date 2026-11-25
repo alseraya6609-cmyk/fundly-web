@@ -128,7 +128,10 @@ export default function Home() {
 
           <SectionTitle>{t('إدارة أمورك باحترافية')}</SectionTitle>
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-            {order.map((id) => {
+            {/* قبل وصول إعدادات الحساب لا تُرسم الأقسام الافتراضية، وإلا ظهر المخفي منها ثم اختفى. */}
+            {store.isPending &&
+              DEFAULT_ORDER.map((id) => <div key={id} aria-hidden className="card h-[178px] animate-pulse bg-line/60" />)}
+            {!store.isPending && order.map((id) => {
               const m = modules[id]
               return (
                 <Link key={id} to={m.to} className="card flex flex-col gap-3 p-4 transition-colors hover:bg-line/70">
